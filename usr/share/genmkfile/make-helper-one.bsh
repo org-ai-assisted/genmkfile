@@ -197,6 +197,40 @@ make_dependencies_filter_helper() {
 ## make_get_variables so 'genmkfile deb-build-dep' (and friends) can run on a
 ## fresh system without build-essential, then install it from
 ## debian/control. dpkg-parsechangelog (which pulls in build-essential) is
+## Ensure dctrl-tools (provides grep-dctrl) is installed.
+## Called by make_get_dependencies before grep-dctrl is invoked.
+##
+## Rationale: `genmkfile deb-all-dep` (and deb-build-dep / deb-run-dep)
+## is the canonical "install all build/run dependencies" command for
+## a freshly-cloned source tree. It uses grep-dctrl from dctrl-tools
+## to read debian/control. If dctrl-tools itself is missing, the
+## previous behaviour was to fail with
+##   ERROR: required command 'grep-dctrl' not found in PATH.
+## and tell the operator to fix it manually, defeating the whole
+## point of the deb-all-dep target. Now we self-bootstrap dctrl-tools
+## inside the very target whose job is to install dependencies.
+##
+## Only attempts the install when running as root (`genmkfile` is
+## customarily invoked under sudo for these targets) and apt-get is
+## present; otherwise emits a clear error pointing to the manual fix.
+## Idempotent: command -v guard means no apt round-trip when
+## dctrl-tools is already installed.
+make_ensure_dctrl_tools() {
+  if command -v grep-dctrl >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ "$(id -u)" -ne 0 ]; then
+    printf '%s\n' "$0: ERROR: grep-dctrl not in PATH. Re-run as root (or via sudo) so genmkfile can apt-install dctrl-tools, or apt-install it manually first." >&2
+    return 1
+  fi
+  if ! command -v apt-get >/dev/null 2>&1; then
+    printf '%s\n' "$0: ERROR: grep-dctrl not in PATH and apt-get is not available. Install dctrl-tools manually." >&2
+    return 1
+  fi
+  printf '%s\n' "$0: INFO: bootstrapping dctrl-tools (provides grep-dctrl) via apt-get..."
+  apt-get install --yes --no-install-recommends -- dctrl-tools
+}
+
 ## therefore only required for other targets.
 make_get_dependencies() {
   ## sets: make_debian_control_file_relative_path
@@ -205,6 +239,8 @@ make_get_dependencies() {
   # shellcheck source=SCRIPTDIR/shared.bsh
   source "$GENMKFILE_PATH/shared.bsh"
   make_shared_function
+
+  make_ensure_dctrl_tools
 
   make_require grep-dctrl
 
