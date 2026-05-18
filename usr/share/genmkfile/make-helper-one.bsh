@@ -1894,7 +1894,6 @@ make_git_tag_check() {
 }
 
 make_git_commit_verify() {
-  make_function_run make_git_tag_shared
   ## Direct call (no make_function_run wrapper) so this if-branch can
   ## fire; make_function_run 'exit's on failure.
   if ! sq_git_run "HEAD"; then
