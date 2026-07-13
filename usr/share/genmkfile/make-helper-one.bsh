@@ -7,6 +7,8 @@
 ## Sourced-only function library (make-helper.bsh sources it); it must not set
 ## strict-mode, which would leak 'errexit'/'nounset'/'pipefail' into the
 ## sourcing shell.
+## style-ok: no-has -- the two 'command -v' uses below RESOLVE a command's
+## path (has returns only a boolean); this library runs before helper-scripts.
 
 #set -x
 
@@ -2442,7 +2444,8 @@ if was_executed "${BASH_SOURCE[0]}"; then
   __needs_dependencies=false
   for __arg in "$@"; do
     case "$__arg" in
-    "" | help | --) ;;
+    "" | help | --)
+      ;;
     deb-build-dep | deb-run-dep | deb-all-dep)
       __needs_dependencies=true
       ;;
