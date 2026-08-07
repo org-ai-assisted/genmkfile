@@ -3,17 +3,28 @@
 ## Copyright (C) 2020 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
 ## See the file COPYING for copying conditions.
 
+set -o errexit
+set -o nounset
+set -o pipefail
+set -o errtrace
+shopt -s inherit_errexit
+shopt -s shift_verbose
+
 if [ -o xtrace ]; then
    export GENMKFILE_DEBUG=1
 fi
 
-MYDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+MYDIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" && pwd )"
 
-pushd "$MYDIR" >/dev/null
+pushd -- "${MYDIR}" >/dev/null
 cd ..
 cd ..
 
-if [ "$GENMKFILE_PATH" = "" ] ; then
+## Overridable from the environment; the test below is what handles it being
+## absent, so it must not abort before reaching it.
+GENMKFILE_PATH="${GENMKFILE_PATH:-}"
+
+if [ "${GENMKFILE_PATH}" = "" ] ; then
    if [ -d "./packages/kicksecure/genmkfile/usr/share/genmkfile" ]; then
       GENMKFILE_PATH="./packages/kicksecure/genmkfile/usr/share/genmkfile"
    elif [ -d "./usr/share/genmkfile" ]; then
@@ -21,22 +32,27 @@ if [ "$GENMKFILE_PATH" = "" ] ; then
    elif [ -d "/usr/share/genmkfile" ]; then
       GENMKFILE_PATH="/usr/share/genmkfile"
    else
-      echo "$0: ERROR: Auto detection of GENMKFILE_PATH failed!"
+      printf '%s\n' "$0: ERROR: Auto detection of GENMKFILE_PATH failed!" >&2
+      ## Stop here. Previously this printed and CARRIED ON, so 'realpath ""'
+      ## failed, the makefile-full check ran against an empty path, and
+      ## make-helper.bsh was finally invoked with nothing -- a cascade of
+      ## follow-on errors after the real one had already been reported.
+      exit 1
    fi
 fi
 
-GENMKFILE_PATH="$(realpath "$GENMKFILE_PATH")"
+GENMKFILE_PATH="$(realpath -- "${GENMKFILE_PATH}")"
 export GENMKFILE_PATH
 
 if [ ! -r "${GENMKFILE_PATH}/makefile-full" ]; then
-   echo "$0: ERROR: Folder '$GENMKFILE_PATH' exists but file '${GENMKFILE_PATH}/makefile-full' does not readable!"
-   echo "$0: ERROR: Running 'ls -la $GENMKFILE_PATH' for debugging..."
-   ls -la "$GENMKFILE_PATH"
-   echo "$0: ERROR: Permission denied error? Try running:"
-   echo ""
-   echo "sudo chmod --recursive o+r '$GENMKFILE_PATH'"
-   echo "sudo chmod o+x '$GENMKFILE_PATH'"
-   echo ""
+   printf '%s\n' "$0: ERROR: Folder '${GENMKFILE_PATH}' exists but file '${GENMKFILE_PATH}/makefile-full' does not readable!"
+   printf '%s\n' "$0: ERROR: Running 'ls -la ${GENMKFILE_PATH}' for debugging..."
+   ls -la -- "${GENMKFILE_PATH}"
+   printf '%s\n' "$0: ERROR: Permission denied error? Try running:"
+   printf '%s\n' ""
+   printf '%s\n' "sudo chmod --recursive o+r '${GENMKFILE_PATH}'"
+   printf '%s\n' "sudo chmod o+x '${GENMKFILE_PATH}'"
+   printf '%s\n' ""
 fi
 
 popd >/dev/null
