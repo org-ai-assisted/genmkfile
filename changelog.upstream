@@ -1,9 +1,189 @@
+commit dbbc27b5b2597583a4278a48e1686d47fa074c9c
+Merge: e2e6642 f409cf6
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Wed Jul 29 08:09:05 2026 -0400
+
+    Merge remote-tracking branch 'refs/remotes/org-ai-assisted/master'
+
+commit f409cf689968c3d05ca30c3d132e026b37ec44e4
+Merge: e2e6642 22adc06
+Author: assisted-by-ai (Bot Account) (Machine Account) <228987186+assisted-by-ai@users.noreply.github.com>
+Date:   Tue Jul 28 13:01:18 2026 -0400
+
+    skill: correct the genmkfile build sequence and target descriptions (#40)
+
+    Docs-only. Corrects four false claims verified against the engine: deb-pkg runs deb-cleanup/dist/debdist/debdsc itself (make-helper.bsh intercepts it), distclean is the same as clean, deb-install installs the built .deb rather than build-deps, and build outputs go to $DISTDIR (reassigned to make_cowbuilder_dist_folder under cowbuilder). Documents deb-clean/deb-cleanup, that deb-cleanup deletes the package's artifacts from $DISTDIR, and that any captured lintian output is fatal.
+
+commit 22adc069c94f5f537087a15584a3b643e1b885f7
+Author: claude (dev113 6465e658-44ed-4e80-93cf-c9586d8683d6) <noreply@anthropic.com>
+Date:   Tue Jul 28 12:30:40 2026 -0400
+
+    skill: any captured lintian output is fatal, not just warnings
+
+    make_lintian gates the handler on the output being non-empty, independent of
+    lintian's exit code, and the default opts add --pedantic --info --display-info.
+    So a purely informational note fails the build. The knob description already said
+    this; the in-place section said "WARNING", which understates it.
+
+    Generated with assistance from Claude Code.
+
+commit 31a792aff9d21394c940412d4029b85eb6c5cd6a
+Author: claude (dev113 6465e658-44ed-4e80-93cf-c9586d8683d6) <noreply@anthropic.com>
+Date:   Tue Jul 28 12:06:56 2026 -0400
+
+    skill: correct the build sequence and target descriptions
+
+    Found by an AI-review pass over the docs; each claim re-verified against the
+    engine before changing.
+
+    - 'deb-pkg' does NOT need dist/debdist/debdsc run first. make-helper.bsh:75-91
+      intercepts it and runs deb-cleanup, dist, debdist, debdsc, then deb-pkg-build
+      per architecture. deb-cleanup DELETES those artifacts first, so running them by
+      hand is wasted work. The "did you run genmkfile dist" error belongs to
+      deb-pkg-build.
+    - 'distclean' does not remove tarballs; it is currently the same as 'clean'
+      (make_distclean -> make_clean; the engine's own help says so).
+    - 'deb-install' installs the already-built .deb and runs installcheck; build-deps
+      are deb-build-dep / deb-all-dep.
+    - Build outputs go to $DISTDIR, which is '..' by default but is reassigned to
+      make_cowbuilder_dist_folder under cowbuilder. genmkfile hand-rolls tar BECAUSE
+      dpkg-source can only target '../'.
+    - 'deb-cleanup' also runs make_clean and debian/rules clean, and deletes that
+      package's artifacts from $DISTDIR -- which under cowbuilder is the .deb cache,
+      so every deb-pkg wipes that package's cached files before rebuilding and a
+      failed build leaves none. It executes code from the package tree, so it is not
+      a pure file-removal step.
+    - Override files are also read from ./debian/ and are SOURCED into the engine.
+    - GENMKFILE_PATH detection is relative to the wrapper, and has a third branch.
+
+    Generated with assistance from Claude Code.
+
+commit 219a0262bd3b2406f14dd349298a3647dac9fbe0
+Author: claude (dev113 6465e658-44ed-4e80-93cf-c9586d8683d6) <noreply@anthropic.com>
+Date:   Tue Jul 28 11:53:42 2026 -0400
+
+    Revert "distclean: also drop debhelper residue"
+
+    Wrong layer. 'distclean' cleans what genmkfile/make produced; the residue in
+    question is debhelper's, left by a foreign 'debuild' run, and genmkfile already
+    has the right targets for it -- 'deb-clean' and 'deb-cleanup'. A tree that
+    'dist' rejects after 'distclean' means the wrong target was run, not that
+    distclean is incomplete.
+
+    This reverts commit 012520f.
+
+    Generated with assistance from Claude Code.
+
+commit 012520fc0280986cad130457a5467960dbf7b437
+Author: claude (dev113 6465e658-44ed-4e80-93cf-c9586d8683d6) <noreply@anthropic.com>
+Date:   Tue Jul 28 11:48:34 2026 -0400
+
+    distclean: also drop debhelper residue
+
+    'genmkfile distclean' ran only the Makefile's clean target, so it left
+    debian/.debhelper, debian/files, debian/debhelper-build-stamp, the per-package
+    staging dir and *.substvars behind. 'genmkfile dist' then refuses the tree with
+    "Empty directory found!", i.e. distclean could not restore a tree that dist
+    accepts. Run make_deb_clean as well.
+
+    Verified in a disposable VM against this package's own source:
+    - in-place build leaves .debhelper / genmkfile / files / debhelper-build-stamp
+      / genmkfile.substvars
+    - BEFORE: distclean cleared none of them, and 'genmkfile dist' failed with
+      "Empty directory found!"
+    - AFTER: distclean cleared all of them and 'genmkfile dist' succeeded
+    - 'distclean' and 'deb-cleanup' both still exit 0
+
+    deb-cleanup keeps its wider scope (debian/rules clean plus the debuild artifacts
+    in the parent folder); this only makes distclean self-consistent with dist.
+
+    Generated with assistance from Claude Code.
+
+commit a9499ebdd3ec34bcb29a06f217ebb9676c58fc92
+Author: claude (dev113 6465e658-44ed-4e80-93cf-c9586d8683d6) <noreply@anthropic.com>
+Date:   Tue Jul 28 11:27:12 2026 -0400
+
+    skill: point at genmkfile deb-cleanup, document the cleanup targets
+
+    - The residue an in-place build leaves is cleared by 'genmkfile deb-cleanup'
+      (make_dh_clean + make_deb_clean), not by hand-running debian/rules clean.
+      'distclean' only runs the Makefile's clean target, which is why it does not
+      cover it.
+    - Note that deb-pkg already runs deb-cleanup first, so a stale tree usually
+      self-corrects on the next build.
+    - Add deb-clean and deb-cleanup to the target list; they were undocumented.
+
+    Generated with assistance from Claude Code.
+
+commit 2d2258edb93265a685dbc39b012402cae92a6bd1
+Author: claude (dev113 6465e658-44ed-4e80-93cf-c9586d8683d6) <noreply@anthropic.com>
+Date:   Tue Jul 28 11:02:56 2026 -0400
+
+    skill: recommend cowbuilder; describe the in-place build neutrally
+
+    - Add a short "Prefer cowbuilder" note: the chroot declares its own build-deps, so
+      the .deb does not depend on host state and the build is reproducible elsewhere.
+      A missing base should be created, not worked around.
+    - Reword the in-place section as a behaviour reference rather than a recipe: what
+      'genmkfile deb-pkg' does when make_use_cowbuilder is unset, the debhelper residue
+      it leaves and how to clear it (debian/rules clean, not genmkfile distclean), and
+      the fatal-lintian-warning timing.
+
+    Generated with assistance from Claude Code.
+
+commit 0d64b8c9f74d183de854ad1ac3537d5c01603df5
+Author: claude (dev113 6465e658-44ed-4e80-93cf-c9586d8683d6) <noreply@anthropic.com>
+Date:   Tue Jul 28 10:50:47 2026 -0400
+
+    Revert "skill: cowbuilder is mandatory; drop the in-place build path"
+
+    The always-cowbuilder rule is a LOCAL dist-ai-config policy, not genmkfile
+    upstream behaviour. It belongs in the derivative-maker skill and the
+    cowbuilder-guard hook, both of which live in dist-ai-config.
+
+    This reverts commit 4fcbe0a.
+
+    Generated with assistance from Claude Code.
+
+commit 4fcbe0af3c08601bfaffe9a2d845355bb4862914
+Author: claude (dev113 6465e658-44ed-4e80-93cf-c9586d8683d6) <noreply@anthropic.com>
+Date:   Tue Jul 28 09:45:57 2026 -0400
+
+    skill: cowbuilder is mandatory; drop the in-place build path
+
+    - Packages are ALWAYS built in a cowbuilder chroot. An in-place build ties the
+      .deb to host state instead of a declared chroot and leaves debhelper residue
+      that later fails the pristine-tree check.
+    - A missing cowbuilder base means recreate the base, not fall back in-place.
+    - Enforced by the cowbuilder-guard PreToolUse hook; COWBUILDER_GUARD_ALLOW=1 is
+      the deliberate override.
+
+    Generated with assistance from Claude Code.
+
+commit e2e664203551b1da163696848e79eee7e1ee042e
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Tue Jul 28 13:10:43 2026 +0000
+
+    bumped changelog version
+
 commit 42176da71241a7574bb96497d41c6a2009a98a9c
 Merge: a1cd19b 376a6bb
 Author: Patrick Schleizer <adrelanos@whonix.org>
 Date:   Tue Jul 28 07:55:48 2026 -0400
 
     Merge remote-tracking branch 'refs/remotes/org-ai-assisted/master'
+
+commit 1c5fe2cebcaf3bfdd98eeeed9bdae84e39eaaa72
+Author: claude (dev113 6465e658-44ed-4e80-93cf-c9586d8683d6) <noreply@anthropic.com>
+Date:   Tue Jul 28 07:15:41 2026 -0400
+
+    skill: document the in-place (no chroot) build path
+
+    - Arch:all file-only packages build identically without cowbuilder, so a missing
+      base is not a blocker. Give the per-package sequence, the ../ artifact location,
+      why make_use_lintian=false belongs there, and the debhelper-residue cleanup.
+
+    Generated with assistance from Claude Code.
 
 commit 376a6bbc7b43a3c48270df6c12f02ee62298599e
 Author: claude <noreply@anthropic.com>
@@ -18,6 +198,24 @@ Date:   Tue Jul 28 06:17:11 2026 -0400
     stays cleanly disabled.
 
     Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+commit 690ac592496272138a5277b194a009985fdcd79f
+Author: claude (dev113 6465e658-44ed-4e80-93cf-c9586d8683d6) <noreply@anthropic.com>
+Date:   Sun Jul 26 17:30:05 2026 -0400
+
+    skill: document the second "Empty directory found!" cause and lintian fail-closed
+
+    - "Empty directory found!" has two distinct causes; the skill only covered one.
+      Add the in-place debuild residue case: debian/.debhelper/generated/_source/home
+      is left behind empty, genmkfile distclean does NOT clear it, fakeroot
+      debian/rules clean (dh_clean) does.
+    - make_use_lintian was listed as a bare knob. It fails CLOSED on a warning: the
+      default opts add --pedantic --info --display-info, so any output reaches
+      make_lintian_on_warning and exits non-zero unless
+      make_lintian_fail_open_versus_closed=open. It runs after the .deb is built, so
+      the artifact exists despite the failure -- check the dist folder before rebuilding.
+
+    Generated with assistance from Claude Code.
 
 commit a1cd19b9421b3ff21e5d96168d510a3812623472
 Merge: b79cab0 3edb3bb
