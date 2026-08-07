@@ -47,7 +47,13 @@ export GENMKFILE_PATH
 if [ ! -r "${GENMKFILE_PATH}/makefile-full" ]; then
    printf '%s\n' "$0: ERROR: Folder '${GENMKFILE_PATH}' exists but file '${GENMKFILE_PATH}/makefile-full' does not readable!"
    printf '%s\n' "$0: ERROR: Running 'ls -la ${GENMKFILE_PATH}' for debugging..."
-   ls -la -- "${GENMKFILE_PATH}"
+   ## Best-effort: this 'ls' is a debugging aid INSIDE an already-reported
+   ## failure, and the very permission problem it exists to show is what makes
+   ## it fail. Under errexit an unlistable directory would abort right here --
+   ## swallowing the chmod remediation below, which is the one thing that
+   ## actually helps, and skipping the make-helper.bsh attempt that this branch
+   ## deliberately still makes (it warns, it does not stop).
+   ls -la -- "${GENMKFILE_PATH}" || true
    printf '%s\n' "$0: ERROR: Permission denied error? Try running:"
    printf '%s\n' ""
    printf '%s\n' "sudo chmod --recursive o+r '${GENMKFILE_PATH}'"
