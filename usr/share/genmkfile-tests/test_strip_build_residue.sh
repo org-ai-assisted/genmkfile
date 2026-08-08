@@ -99,7 +99,8 @@ mkdir --parents -- \
    "${test_root}/tree/usr/lib/python3/dist-packages/pkg/.pytest_cache" \
    "${test_root}/tree/.git/objects" \
    "${test_root}/tree/.git/__pycache__" \
-   "${test_root}/tree/usr/share/mypy_cache_docs"
+   "${test_root}/tree/usr/share/mypy_cache_docs" \
+   "${test_root}/tree/debian"
 
 printf '%s\n' "junk" > "${test_root}/tree/usr/lib/python3/dist-packages/pkg/.mypy_cache/3.13/x.json"
 printf '%s\n' "junk" > "${test_root}/tree/usr/lib/python3/dist-packages/pkg/__pycache__/x.pyc"
@@ -134,6 +135,15 @@ check_present ".git contents survive" \
    "${test_root}/tree/.git/objects/deadbeef"
 check_present ".git is pruned, even for a residue-named directory" \
    "${test_root}/tree/.git/__pycache__/x.pyc"
+
+## The guard: a tree with no debian/ is not a package source root, and this
+## function deletes recursively, so it must strip nothing there.
+mkdir --parents -- "${test_root}/not_a_package/__pycache__"
+printf '%s\n' "junk" > "${test_root}/not_a_package/__pycache__/x.pyc"
+cd -- "${test_root}/not_a_package"
+make_strip_build_residue
+check_present "no debian/ - residue left untouched" \
+   "${test_root}/not_a_package/__pycache__/x.pyc"
 
 printf '%s\n' "---"
 printf '%s\n' "${tests_total} run, $(( tests_total - tests_failed )) pass, ${tests_failed} fail, 0 skip"

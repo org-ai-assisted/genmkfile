@@ -1559,6 +1559,16 @@ make_deb_clean() {
 ## delete, so nested residue cannot produce stale entries.
 make_strip_build_residue() {
   make_require safe-rm find
+  ## Refuse to sweep a tree that is not a package source root. The rest of this
+  ## file also assumes PWD is the package root, but those functions delete a
+  ## handful of specifically named artifacts; this one deletes RECURSIVELY, so
+  ## running it from the wrong directory would remove every __pycache__ beneath
+  ## it. Skip rather than die: an unexpected context must not break a build,
+  ## and the message says why nothing was stripped.
+  if ! test -d "${PWD}/debian"; then
+    make_output_info "no 'debian' directory in '${PWD}' - not a package source root, skipping build residue strip."
+    return 0
+  fi
   make_output_info "stripping build residue (removed paths listed below, if any)"
   find "${PWD}" \
     -name ".git" -prune -o \
