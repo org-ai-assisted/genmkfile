@@ -1683,6 +1683,20 @@ array_match() {
   return 1
 }
 
+## True for an installed FILE at this path, including a dangling symlink, and false for
+## a directory.
+##
+## 'test -f' follows the link and is therefore FALSE when the target is gone, so an
+## uninstall keyed on it silently leaves the symlink behind and the following
+## uninstallcheck reports success -- a false green on both steps.
+##
+## '-L' rather than '-e' for the second arm: '-e' is also true for a DIRECTORY, and the
+## loop below hands each hit to safe-rm, which then fails with "Is a directory". The old
+## '-f' excluded directories, and that part was right.
+genmkfile_path_present() {
+  [ -f "$1" ] || [ -L "$1" ]
+}
+
 make_helper() {
   shopt -s globstar dotglob nullglob
   local source_directory source_fso file_without_pwd file_with_destdir
@@ -1871,7 +1885,7 @@ make_helper() {
         fi
         ## 'chmod' cannot be simulated because actually no file gets copied.
       elif [ "${make_uninstallcheck_}" = "true" ]; then
-        if test -f "${file_with_destdir}"; then
+        if genmkfile_path_present "${file_with_destdir}"; then
           make_output_error "file '${file_with_destdir}' still installed."
           still_installed="true"
         fi
@@ -1891,11 +1905,11 @@ make_helper() {
           fi
         fi
       elif [ "${make_uninstallsim_}" = "true" ]; then
-        if test -f "${file_with_destdir}"; then
+        if genmkfile_path_present "${file_with_destdir}"; then
           make_output_info "would do: safe-rm --verbose -- \"${file_with_destdir}\""
         fi
       elif [ "${make_uninstall_}" = "true" ]; then
-        if test -f "${file_with_destdir}"; then
+        if genmkfile_path_present "${file_with_destdir}"; then
           safe-rm --verbose -- "${file_with_destdir}"
         fi
       else
