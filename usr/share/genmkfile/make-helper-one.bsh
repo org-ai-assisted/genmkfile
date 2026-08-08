@@ -1563,7 +1563,8 @@ make_strip_build_residue() {
   find "${PWD}" \
     -name ".git" -prune -o \
     -type d \
-    \( -name ".mypy_cache" -o -name "__pycache__" -o -name ".hypothesis" \) \
+    \( -name ".mypy_cache" -o -name "__pycache__" -o -name ".hypothesis" \
+       -o -name ".pytest_cache" \) \
     -print -prune -exec safe-rm -r -f -- {} +
 }
 

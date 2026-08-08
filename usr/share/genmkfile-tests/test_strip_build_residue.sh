@@ -96,6 +96,7 @@ mkdir --parents -- \
    "${test_root}/tree/usr/lib/python3/dist-packages/pkg/.mypy_cache/3.13" \
    "${test_root}/tree/usr/lib/python3/dist-packages/pkg/__pycache__" \
    "${test_root}/tree/.hypothesis" \
+   "${test_root}/tree/usr/lib/python3/dist-packages/pkg/.pytest_cache" \
    "${test_root}/tree/.git/objects" \
    "${test_root}/tree/.git/__pycache__" \
    "${test_root}/tree/usr/share/mypy_cache_docs"
@@ -103,12 +104,13 @@ mkdir --parents -- \
 printf '%s\n' "junk" > "${test_root}/tree/usr/lib/python3/dist-packages/pkg/.mypy_cache/3.13/x.json"
 printf '%s\n' "junk" > "${test_root}/tree/usr/lib/python3/dist-packages/pkg/__pycache__/x.pyc"
 printf '%s\n' "junk" > "${test_root}/tree/.hypothesis/x.db"
+printf '%s\n' "junk" > "${test_root}/tree/usr/lib/python3/dist-packages/pkg/.pytest_cache/x.json"
 printf '%s\n' "real" > "${test_root}/tree/usr/lib/python3/dist-packages/pkg/module.py"
 printf '%s\n' "real" > "${test_root}/tree/usr/share/mypy_cache_docs/readme.txt"
 printf '%s\n' "real" > "${test_root}/tree/.git/objects/deadbeef"
 ## A residue-NAMED directory inside .git. Without the -prune this is deleted,
 ## which is what makes the .git assertion below able to fail at all. A plain
-## file there proves nothing: find only matches the three residue names.
+## file there proves nothing: find only matches the residue names.
 printf '%s\n' "real" > "${test_root}/tree/.git/__pycache__/x.pyc"
 
 cd -- "${test_root}/tree"
@@ -120,6 +122,8 @@ check_absent "__pycache__ removed" \
    "${test_root}/tree/usr/lib/python3/dist-packages/pkg/__pycache__"
 check_absent ".hypothesis removed" \
    "${test_root}/tree/.hypothesis"
+check_absent ".pytest_cache removed" \
+   "${test_root}/tree/usr/lib/python3/dist-packages/pkg/.pytest_cache"
 
 ## The other direction, which is what makes a deletion bug visible.
 check_present "real source file survives" \
