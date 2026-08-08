@@ -1667,6 +1667,28 @@ in_array() {
   return 1
 }
 
+## True when <path> IS one of the remaining arguments, or lives underneath one of them.
+##
+## Used for 'folder_permission_skip_list': the question is "is this file inside a folder
+## whose permissions we leave alone", which is a path-prefix question, not a substring
+## one. 'array_match' answers the substring version, so a skip-list entry of '/usr/src'
+## also matched '/usr/share/doc/x/usr/src-notes' and that file silently kept whatever
+## mode it arrived with. Matching on the '/' boundary keeps the intended case
+## ('/usr/src/foo') and drops the accidental one.
+##
+## array_match itself is left alone: it is generic, and a package's
+## make-helper-overrides.bsh is sourced into this shell and may call it.
+path_is_within_any() {
+  local needle="$1" item
+  shift
+  for item in "$@"; do
+    if [ "${needle}" = "${item}" ] || [[ "${needle}" == "${item}/"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 array_match() {
   local needle item
   needle="$1"
@@ -1834,8 +1856,8 @@ make_helper() {
             fi
           fi
         elif test -f "${source_fso}"; then
-          true "calling...: array_match |${file_without_pwd}| |${folder_permission_skip_list[*]}|"
-          if ! array_match "${file_without_pwd}" "${folder_permission_skip_list[@]}"; then
+          true "calling...: path_is_within_any |${file_without_pwd}| |${folder_permission_skip_list[*]}|"
+          if ! path_is_within_any "${file_without_pwd}" "${folder_permission_skip_list[@]}"; then
             true "array_match did not match, therefore continuing..."
             ## CI workaround for tree-mode regressions. Some upstream
             ## push paths (notably the GitHub Contents API used by
