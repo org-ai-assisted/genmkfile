@@ -1609,18 +1609,28 @@ make_deb_cleanup() {
   make_function_run make_dh_clean
   make_function_run make_deb_clean
   for package in "${make_package_list[@]}"; do
+    ## No '-' in the version globs. A Debian revision is optional, and the upstream
+    ## tarball is named from make_pkg_version WITHOUT the revision, so it never has
+    ## one: requiring a hyphen meant '<pkg>_1.0.orig.tar.xz' matched nothing and every
+    ## PREVIOUS version's tarball accumulated in DISTDIR -- the current one was removed
+    ## only by the exact-path fallback below, which is what hid it. Revision-less
+    ## versions ('<pkg>_2.0_all.deb') were likewise never swept, leaving a stale binary
+    ## for a later build to publish or install.
+    ##
+    ## The leading '<pkg>_' still anchors each pattern, so a sibling package is
+    ## untouched: '<pkg>-extra_1.0-1_all.deb' does not match '<pkg>_'*.
     for to_delete in \
-      "${DISTDIR}/${package}_"*-*_*".deb" \
-      "${DISTDIR}/${package}-dbgsym_"*-*_*".deb" \
-      "${DISTDIR}/${package}_"*-*_*".buildinfo" \
-      "${DISTDIR}/${package}_"*-*".debian.tar.xz" \
-      "${DISTDIR}/${package}_"*-*".orig.tar.xz" \
-      "${DISTDIR}/${package}_"*-*".dsc" \
-      "${DISTDIR}/${package}_"*-*_*".build" \
-      "${DISTDIR}/${package}_"*-*_*".changes" \
-      "${DISTDIR}/${package}_"*-*"_source.build" \
-      "${DISTDIR}/${package}_"*-*"_source.changes" \
-      "${DISTDIR}/${package}_"*-*"_source.${package}.upload"; do
+      "${DISTDIR}/${package}_"*_*".deb" \
+      "${DISTDIR}/${package}-dbgsym_"*_*".deb" \
+      "${DISTDIR}/${package}_"*_*".buildinfo" \
+      "${DISTDIR}/${package}_"*".debian.tar.xz" \
+      "${DISTDIR}/${package}_"*".orig.tar.xz" \
+      "${DISTDIR}/${package}_"*".dsc" \
+      "${DISTDIR}/${package}_"*_*".build" \
+      "${DISTDIR}/${package}_"*_*".changes" \
+      "${DISTDIR}/${package}_"*"_source.build" \
+      "${DISTDIR}/${package}_"*"_source.changes" \
+      "${DISTDIR}/${package}_"*"_source.${package}.upload"; do
       if test -e "${to_delete}"; then
         safe-rm -- "${to_delete}"
       fi
