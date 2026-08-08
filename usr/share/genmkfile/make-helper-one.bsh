@@ -1543,9 +1543,34 @@ make_deb_clean() {
   done
 }
 
+## Python tooling (mypy, pytest, hypothesis) writes its caches into the
+## directory it runs in, which for in-tree linting is the packaged source
+## tree. Packaging copies the WORKING TREE, not git's view, so a directory
+## that is already in .gitignore still ends up inside the .deb; lintian then
+## fails the build closed on package-contains-python-dot-directory. Strip it
+## here, since deb-cleanup runs before the tree is packaged.
+## Each removal is logged: a silent sweep is indistinguishable from one that
+## removed the wrong thing.
+## No 'while read ... < <(find ...)': process substitution runs find in a
+## subshell whose exit status is invisible, so under errexit a broken find
+## would strip nothing and the build would continue looking clean. Running
+## find in the foreground keeps its failure fatal.
+## '-prune' on a match stops find descending into a directory it is about to
+## delete, so nested residue cannot produce stale entries.
+make_strip_build_residue() {
+  make_require safe-rm find
+  make_output_info "stripping build residue (removed paths listed below, if any)"
+  find "${PWD}" \
+    -name ".git" -prune -o \
+    -type d \
+    \( -name ".mypy_cache" -o -name "__pycache__" -o -name ".hypothesis" \) \
+    -print -prune -exec safe-rm -r -f -- {} +
+}
+
 make_deb_cleanup() {
   local to_delete package
   make_require safe-rm
+  make_function_run make_strip_build_residue
   make_function_run make_undist
   make_function_run make_undebdist
   make_function_run make_undebdsc
