@@ -45,20 +45,24 @@ GENMKFILE_PATH="$(realpath -- "${GENMKFILE_PATH}")"
 export GENMKFILE_PATH
 
 if [ ! -r "${GENMKFILE_PATH}/makefile-full" ]; then
-   printf '%s\n' "$0: ERROR: Folder '${GENMKFILE_PATH}' exists but file '${GENMKFILE_PATH}/makefile-full' does not readable!"
-   printf '%s\n' "$0: ERROR: Running 'ls -la ${GENMKFILE_PATH}' for debugging..."
+   ## All of this block goes to STDERR. It is diagnostic output, and genmkfile's
+   ## stdout is consumed by callers -- a make wrapper reading it would otherwise
+   ## receive the error text and the 'ls' listing as if they were data. The
+   ## detection-failure branch above already used '>&2'; this block did not.
+   printf '%s\n' "$0: ERROR: Folder '${GENMKFILE_PATH}' exists but file '${GENMKFILE_PATH}/makefile-full' does not readable!" >&2
+   printf '%s\n' "$0: ERROR: Running 'ls -la ${GENMKFILE_PATH}' for debugging..." >&2
    ## Best-effort: this 'ls' is a debugging aid INSIDE an already-reported
    ## failure, and the very permission problem it exists to show is what makes
    ## it fail. Under errexit an unlistable directory would abort right here --
    ## swallowing the chmod remediation below, which is the one thing that
    ## actually helps, and skipping the make-helper.bsh attempt that this branch
    ## deliberately still makes (it warns, it does not stop).
-   ls -la -- "${GENMKFILE_PATH}" || true
-   printf '%s\n' "$0: ERROR: Permission denied error? Try running:"
-   printf '%s\n' ""
-   printf '%s\n' "sudo chmod --recursive o+r '${GENMKFILE_PATH}'"
-   printf '%s\n' "sudo chmod o+x '${GENMKFILE_PATH}'"
-   printf '%s\n' ""
+   ls -la -- "${GENMKFILE_PATH}" >&2 || true
+   printf '%s\n' "$0: ERROR: Permission denied error? Try running:" >&2
+   printf '%s\n' "" >&2
+   printf '%s\n' "sudo chmod --recursive o+r '${GENMKFILE_PATH}'" >&2
+   printf '%s\n' "sudo chmod o+x '${GENMKFILE_PATH}'" >&2
+   printf '%s\n' "" >&2
 fi
 
 popd >/dev/null
