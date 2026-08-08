@@ -284,6 +284,42 @@ make_architecture_covers_target() {
   return 1
 }
 
+## Split a Debian changelog version into epoch, upstream version and revision.
+## Sets: make_epoch, make_pkg_version, make_pkg_revision. The revision keeps its
+## leading hyphen because callers concatenate it straight into artifact names
+## ('..._${make_pkg_version}${make_pkg_revision}_...').
+##
+## The revision is the part after the LAST hyphen, per Debian policy: an upstream
+## version may itself contain hyphens. Splitting the revision on the FIRST hyphen
+## while the version strips at the last one made the two halves disagree, so
+## '1.0-beta-1' produced version '1.0-beta' plus revision '-beta-1' and every
+## derived name ('.dsc', '.orig.tar.xz', '.changes') came out as '1.0-beta-beta-1'.
+##
+## Separated from make_get_variables so it can be exercised directly; see
+## genmkfile-tests/test_version_parse.sh.
+make_parse_changelog_version() {
+  local changelog_version="$1"
+  local temp
+
+  if [[ "${changelog_version}" == *-* ]]; then
+    make_pkg_revision="-${changelog_version##*-}"
+    temp="${changelog_version%-*}"
+  else
+    make_pkg_revision=""
+    temp="${changelog_version}"
+  fi
+
+  ## Parse version (strip epoch if present).
+  make_pkg_version="${temp#*:}"
+
+  ## Parse epoch (if present).
+  if [[ "${changelog_version}" == *:* ]]; then
+    make_epoch="${temp%:*}"
+  else
+    make_epoch=""
+  fi
+}
+
 make_get_variables() {
   ## Initialize the array if the caller did not set it (nounset-safe).
   [ -n "${make_folder_list_for_un_and_install+x}" ] || make_folder_list_for_un_and_install=()
@@ -378,23 +414,7 @@ make_get_variables() {
   ##   1:20240810
   make_changelog_version="$(dpkg-parsechangelog --show-field Version)"
 
-  if [[ "${make_changelog_version}" == *-* ]]; then
-    make_pkg_revision="-${make_changelog_version#*-}"
-    temp="${make_changelog_version%-*}"
-  else
-    make_pkg_revision=""
-    temp="${make_changelog_version}"
-  fi
-
-  ## Parse version (strip epoch if present).
-  make_pkg_version="${temp#*:}"
-
-  ## Parse epoch (if present).
-  if [[ "${make_changelog_version}" == *:* ]]; then
-    make_epoch="${temp%:*}"
-  else
-    make_epoch=""
-  fi
+  make_parse_changelog_version "${make_changelog_version}"
 
   true "make_changelog_version: ${make_changelog_version}"
   true "make_pkg_revision: ${make_pkg_revision}"
@@ -1942,7 +1962,7 @@ make_deb_chl_bumpup() {
   make_require debchange bc
   deb_variables_check
 
-  local new_upstream_version new_changelog_version new_revision
+  local new_upstream_version new_changelog_version new_revision revision_number
 
   if [ "${make_bump_type:-}" = "major" ]; then
     true "make_pkg_version: ${make_pkg_version}"
@@ -1952,7 +1972,13 @@ make_deb_chl_bumpup() {
       ## https://stackoverflow.com/a/4485581
       #new_upstream_version="$(printf "%s\n" "$make_pkg_version" | awk -F. '{$NF = $NF + 1;} 1' | sed 's/ /./g')"
       new_upstream_version="${make_pkg_version}"
-      new_revision="$(bc -l <<<"scale=9 ; ${make_pkg_revision} + 1" 2>&1)"
+      ## make_pkg_revision carries its leading hyphen for artifact names, so it must
+      ## be stripped before arithmetic: 'scale=9 ; -1 + 1' is 0, which turned a major
+      ## bump of '1.0-1' into '1.0-0' -- a downgrade debchange rejects. Empty means a
+      ## version with no revision at all, which bumps to 1.
+      revision_number="${make_pkg_revision#-}"
+      [ -n "${revision_number}" ] || revision_number=0
+      new_revision="$(bc -l <<<"scale=9 ; ${revision_number} + 1" 2>&1)"
     else
       #new_upstream_version_without_epoch="$(bc -l <<< "scale=9 ; $make_pkg_version + 0.1" 2>&1)"
       #new_upstream_version="$(printf '%3.1f\n' "$new_upstream_version_without_epoch")"
