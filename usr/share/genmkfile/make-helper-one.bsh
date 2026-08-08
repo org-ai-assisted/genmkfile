@@ -1257,11 +1257,12 @@ beforehand?"
     ## has been package revision number 1 including upstream source tarball
     ## uploaded beforehand. Good enough.
     ##
-    ## --unset=TEMP \
-    ## --unset=TEMPDIR \
-    ## --unset=TMP \
-    ## --unset=TMPDIR \
-    ## Setting TMPDIR breaks pbuilder (which gets called by cowbuilder).
+    ## The temp-dir variables are cleared on the invocation below rather than left to
+    ## the caller: pbuilder passes them into the chroot, where a host-only path does
+    ## not exist. Cleared, not set to some other directory -- a private per-build temp
+    ## dir is the same bug, since that path does not exist in the chroot either.
+    ## Setting TMPDIR to a path absent from the chroot breaks pbuilder (which gets
+    ## called by cowbuilder).
     ## Installing libpam-tmpdir (security-feature) results in these variables being set.
     ## In other words:
     ## "`sudo apt install libpam-tmpdir` breaks cowbuilder"
@@ -1283,8 +1284,11 @@ beforehand?"
     ## runs standalone it is unset and this expands to nothing, keeping
     ## unprivileged standalone builds working.
     # shellcheck disable=SC2086
+    ## After 'sudo', not before: sudo's env_reset discards anything set on the calling
+    ## side, so clearing these earlier would silently do nothing.
     make_log_and_run \
       sudo \
+      env --unset=TMPDIR --unset=TMP --unset=TEMPDIR --unset=TEMP \
       ${COWBUILDER_PREFIX:-} \
       ${UNSHARE_PID_NS:-} \
       cowbuilder \
