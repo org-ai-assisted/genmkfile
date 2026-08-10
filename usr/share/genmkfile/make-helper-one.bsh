@@ -2550,6 +2550,7 @@ if was_executed "${BASH_SOURCE[0]}"; then
   set -o pipefail
   set -o errtrace
   shopt -s inherit_errexit
+  shopt -s shift_verbose
 
   if [ -n "${DIST_APTGETOPT_SERIALIZED:-}" ]; then
     mapfile -t DIST_APTGETOPT <<<"${DIST_APTGETOPT_SERIALIZED}"
