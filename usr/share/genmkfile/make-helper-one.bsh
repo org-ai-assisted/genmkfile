@@ -1590,12 +1590,20 @@ make_strip_build_residue() {
     return 0
   fi
   make_output_info "stripping build residue (removed paths listed below, if any)"
+  ## -mindepth 1: never match "${PWD}" itself, so a package root that happens to BE named
+  ## e.g. '__pycache__' is not handed to 'safe-rm -r' and wiped (the debian/ guard above
+  ## does not exclude that case). The second alternative also takes a stray '.pyc'/'.pyo'
+  ## (including a SYMLINK named so -- Python follows it) that lives OUTSIDE any cache dir,
+  ## which the directory sweep alone would leave behind to mask edited source.
   find "${PWD}" \
+    -mindepth 1 \
     -name ".git" -prune -o \
     -type d \
     \( -name ".mypy_cache" -o -name "__pycache__" -o -name ".hypothesis" \
        -o -name ".pytest_cache" \) \
-    -print -prune -exec safe-rm -r -f -- {} +
+    -print -prune -exec safe-rm -r -f -- {} + -o \
+    \( -type f -o -type l \) \( -name "*.pyc" -o -name "*.pyo" \) \
+    -print -exec safe-rm -f -- {} +
 }
 
 make_deb_cleanup() {
