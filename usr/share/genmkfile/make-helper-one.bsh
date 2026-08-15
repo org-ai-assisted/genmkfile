@@ -1229,7 +1229,7 @@ beforehand?"
     ## may be built by an emulated architecture unnecessarily, which carries
     ## additional risks that we don't want.
     local build_result_dir
-    build_result_dir="$(mktemp --directory --tmpdir "${genmkfile_temp_dir}" -- build_result_XXXXXX)"
+    build_result_dir="$(mktemp --directory --tmpdir="${genmkfile_temp_dir}" -- build_result_XXXXXX)"
 
     ## Using cowbuilder with
     ## --host-arch "$host_architecture" \
