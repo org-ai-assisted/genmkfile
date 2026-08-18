@@ -158,6 +158,16 @@ sudo cowbuilder --create \
 - `git-tag-sign/-verify`.
 - List all: `genmkfile help`.
 
+## Man pages
+
+- `genmkfile manpages` renders every `man/*.ronn` to `auto-generated-man-pages/<name>`
+  with a deterministic date and `--manual`/`--organization` = the source package name.
+- COMMIT `auto-generated-man-pages/` to git; run `genmkfile manpages` (and recommit) only
+  when a `.ronn` changes. Do NOT gitignore them, generate at build time, or Build-Depend on
+  `ronn`.
+- `debian/rules` just installs them: `override_dh_installman: dh_installman
+  $(CURDIR)/auto-generated-man-pages/*` (this package's own `debian/rules` is the model).
+
 ## Extending: overrides (no forking the engine)
 
 - Drop an executable `./make-helper-overrides.bsh` or files in `./make-helper-overrides.d/` (also read from `./debian/`) to add pre/post hooks or replace any target. They are SOURCED into the engine shell -- arbitrary code from the package tree.
