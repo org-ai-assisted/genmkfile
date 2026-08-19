@@ -1,9 +1,112 @@
+commit 4a392a1e2a1d82a9270f5dd5aea9673c844f6d10
+Merge: a562e7a ecbebfc
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Sat Aug 15 11:55:49 2026 -0400
+
+    Merge remote-tracking branch 'org-ai-assisted/master'
+
+commit a562e7a76a6892e00de07ad541d00f7796c272b2
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Sat Aug 15 15:49:27 2026 +0000
+
+    bumped changelog version
+
+commit fa2028a28b30344365b2d9cfd73b11b911daf110
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Sat Aug 15 11:46:35 2026 -0400
+
+    fix
+
+commit 469b161f49978bb8c75ccd7be252c7959afc9034
+Merge: abdc546 5aafc8b
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Sat Aug 15 10:22:56 2026 -0400
+
+    Merge remote-tracking branch 'ArrayBolt3/arraybolt3/trixie'
+
+commit 5aafc8b30e1679a1283c457ba353d0cd64d496f4
+Author: Aaron Rainbolt <arraybolt3@gmail.com>
+Date:   Wed Aug 12 21:50:53 2026 -0400
+
+    fix
+
+commit ed4b056814dc22a029921388a947fee79341c7c1
+Author: Aaron Rainbolt <arraybolt3@gmail.com>
+Date:   Wed Aug 12 21:46:42 2026 -0400
+
+    Improve cross-build support
+
+commit ecbebfc49cc892674b2873d9718b621f0c19dfd7
+Merge: abdc546 163213f
+Author: assisted-by-ai (Bot Account) (Machine Account) <228987186+assisted-by-ai@users.noreply.github.com>
+Date:   Sat Aug 1 05:02:03 2026 -0400
+
+    Merge pull request #41 from org-ai-assisted/ai
+
+    consumer-claude-code: mention-only triggers (propagated from template)
+
+commit 163213f3c2c060a9c6f1730c769dda9fea4c7336
+Author: claude (dev142 b93fb2c6-e15f-4d45-8566-f3ded893b70e) <noreply@anthropic.com>
+Date:   Fri Jul 31 12:58:28 2026 -0400
+
+    add CodeQL consumer workflows (actions, python)
+
+    - Replaces GitHub default-setup CodeQL (web-UI state, no file
+      representation) with the org's file-based consumer wrappers.
+    - Byte-identical copies of
+      developer-meta-files/consumer-templates/.github/workflows/.
+    - No .github/dm-consumer.yml needed: consumer-codeql-actions.yml
+      passes no dm-consumer-section, and codeql-python's section is
+      optional (ci/dm-consumer-load.sh soft-skips when absent).
+    - queries stays the reusable's default security-and-quality,
+      a superset of the security-extended suite default setup used.
+
+    Generated with assistance from Claude Code.
+
+commit 49330d5ef3fe5bb5bff8e4cc90458dedcd4bff6b
+Author: assisted-by-ai (Bot Account) (Machine Account) <228987186+assisted-by-ai@users.noreply.github.com>
+Date:   Thu Jul 30 11:59:07 2026 -0400
+
+    consumer-claude-code: propagate the corrected template
+
+    Byte-identical to developer-meta-files consumer-templates.
+
+    The github.ref comment was wrong for one of the two events it described:
+    issue_comment fires with the default branch ref, pull_request_review_comment
+    with the PR merge ref (refs/pull/<number>/merge). No behaviour change -- the
+    concurrency group reaches github.ref only if neither number field is set, and
+    one always is for the events this workflow accepts.
+
+    Generated with assistance from Claude Code.
+
+commit abdc54610246ccf938f0b1b7cfc8158250546bf9
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Wed Jul 29 12:15:01 2026 +0000
+
+    bumped changelog version
+
 commit dbbc27b5b2597583a4278a48e1686d47fa074c9c
 Merge: e2e6642 f409cf6
 Author: Patrick Schleizer <adrelanos@whonix.org>
 Date:   Wed Jul 29 08:09:05 2026 -0400
 
     Merge remote-tracking branch 'refs/remotes/org-ai-assisted/master'
+
+commit f68990e6d304d8016428045cbd266cbf70d7039f
+Author: claude (dev118 bd22decd-3027-4ab5-9e48-11adfe39b279) <noreply@anthropic.com>
+Date:   Tue Jul 28 13:50:07 2026 -0400
+
+    consumer-claude-code: mention-only triggers (propagated from template)
+
+    Byte-identical cp from developer-meta-files/consumer-templates.
+
+    pull_request and workflow_dispatch resolve to claude-code-action's
+    agent mode, whose trigger is a non-empty 'prompt' input that this
+    workflow does not pass, so those events could only spin up a runner
+    and exit without calling the model - a green "Claude Code Review"
+    check that reviewed nothing.
+
+    Co-Authored-By: Claude <noreply@anthropic.com>
 
 commit f409cf689968c3d05ca30c3d132e026b37ec44e4
 Merge: e2e6642 22adc06

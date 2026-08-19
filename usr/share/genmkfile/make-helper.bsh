@@ -72,6 +72,7 @@ fi
 ## per-architecture loop just rebuilds for the host architecture
 ## once per entry, which is wasteful but not broken.
 first_arch="${make_cross_build_platform_list%% *}"
+export first_arch
 
 if [ "${1:-}" = "deb-pkg" ]; then
   target_architecture="${first_arch}"
