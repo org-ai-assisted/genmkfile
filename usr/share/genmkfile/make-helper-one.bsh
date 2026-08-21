@@ -506,9 +506,14 @@ make_get_variables() {
           ## it (reprepro remove/removesrc, deb-cleanup) continue to handle any
           ## stale copy -- reprepro remove/removesrc of an absent package is a
           ## no-op (exit 0), so this is safe.
+          ##
+          ## Leave all_package_debs_are_arch_all unchanged: an excluded stanza
+          ## produces no architecture-dependent artifact for this target, so it
+          ## must not force the per-architecture secondary build that the flag
+          ## gates below. Only a stanza actually built as architecture-dependent
+          ## (the 'elif' above) clears the flag.
           true "INFO: not expecting a .deb for binary package '${package}': Architecture '${binary_package_architecture}' does not cover target architecture '${target_architecture}'."
           skip_debs_artifact="true"
-          all_package_debs_are_arch_all="false"
         fi
         if [ "${skip_debs_artifact}" = "false" ]; then
           ## Example architecture independent "all" package:
@@ -1175,8 +1180,14 @@ make_deb_pkg_build_shared() {
   local cow_folder base_folder package
   local -a make_cowbuilder_config_file_arg=()
 
-  ## See if we even need to do a build.
-  if [ "${all_package_debs_are_arch_all}" = 'false' ] \
+  ## See if we even need to do a build. Architecture-independent ('all')
+  ## binaries are produced once, while targeting ${first_arch}; a secondary
+  ## architecture only needs a build when this package emits at least one
+  ## architecture-dependent binary. all_package_debs_are_arch_all is 'true'
+  ## only when EVERY built binary is arch-all, so skip exactly that case on a
+  ## non-first architecture. Skipping when the flag is 'false' would instead
+  ## drop the architecture-dependent .deb for every secondary architecture.
+  if [ "${all_package_debs_are_arch_all}" = 'true' ] \
     && ! [ "${target_architecture}" = "${first_arch}" ]; then
     make_output_info "Skipping build because all binaries built by this package are arch-all and they have already been built."
     return 0
@@ -1365,7 +1376,20 @@ beforehand?"
       --buildresult "${build_result_dir}"
 
     if ! [ "${target_architecture}" = "${first_arch}" ]; then
-      safe-rm -- "${build_result_dir}"/*_all.deb
+      ## Drop the arch-all .debs a secondary build re-emitted; the copies kept
+      ## while targeting ${first_arch} are authoritative. nullglob is not set
+      ## here, so an unmatched glob would pass the literal pattern to safe-rm and
+      ## abort the build under errexit -- a pure 'Architecture: any' package
+      ## legitimately produces no '*_all.deb'. Collect real matches only.
+      local arch_all_deb
+      local -a arch_all_debs=()
+      for arch_all_deb in "${build_result_dir}"/*_all.deb; do
+        [ -e "${arch_all_deb}" ] || continue
+        arch_all_debs+=( "${arch_all_deb}" )
+      done
+      if [ "${#arch_all_debs[@]}" -gt 0 ]; then
+        safe-rm -- "${arch_all_debs[@]}"
+      fi
     fi
     mv -- "${build_result_dir}"/* "${DISTDIR}/"
     safe-rm --recursive --force -- "${build_result_dir}"
