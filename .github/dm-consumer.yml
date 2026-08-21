@@ -7,6 +7,14 @@
 ## workflow runtime. Here: apt packages + the helper-scripts runtime the
 ## genmkfile dist-ai suite needs (make-helper sources helper-scripts and shells
 ## out to dpkg-dev / debhelper build tooling).
+##
+## moreutils supplies 'sponge', which 'make_debinstfile_create' requires by name
+## ('make_require safe-rm sponge'). Without it the debinstfile target dies before
+## generating anything, so the routing test fails for a missing tool rather than a
+## real defect.
+##
+## rsync and dctrl-tools are what 'install' and the binary-stanza walk shell out to;
+## declared here rather than relied on as incidentally present in the runner image.
 dist-ai-tests:
-  apt-packages: "python3 safe-rm dpkg-dev debhelper"
+  apt-packages: "python3 safe-rm dpkg-dev debhelper moreutils rsync dctrl-tools"
   helper-scripts: true
