@@ -1253,7 +1253,11 @@ beforehand?"
     cow_folder="${cowbuilder_cache_dir}/cow.cow_${target_architecture}${make_cow_suffix:-}"
     base_folder="${cowbuilder_cache_dir}/base.cow_${target_architecture}"
 
-    if [ -n "${dist_build_pbuilder_config_file:-}" ]; then
+    ## Guard on readability, not just non-empty: a caller may point this at the dm-generated
+    ## '~/derivative-binary/pbuilder.conf', which exists only AFTER a dm build has run. Skip
+    ## '--configfile' when the file is absent rather than pass a path pbuilder aborts on
+    ## sourcing -- so a standalone build needs no always-present wrapper configfile.
+    if [ -n "${dist_build_pbuilder_config_file:-}" ] && [ -r "${dist_build_pbuilder_config_file}" ]; then
       make_cowbuilder_config_file_arg=(--configfile "${dist_build_pbuilder_config_file}")
     fi
 
