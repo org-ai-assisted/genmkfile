@@ -1,3 +1,83 @@
+commit 8752b187756c5f74b193c61f06db7546dcd63df3
+Merge: 9af1390 e4c049f
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Fri Aug 21 02:10:28 2026 -0400
+
+    Merge remote-tracking branch 'org-ai-assisted/ai'
+
+commit e4c049f37b7f9a914c2674ba68743b4617f60858
+Merge: 00933bb 9af1390
+Author: claude (dev270 e3958e5b-3597-4724-96f6-6207667e9d6f) <noreply@anthropic.com>
+Date:   Fri Aug 21 02:05:09 2026 -0400
+
+    Merge branch 'master' into ai (absorb upstream; PR shows only the secondary-arch fix)
+
+commit 00933bbed9f3b1944d5023b6de7a6aff5dc6ff34
+Author: claude (dev270 e3958e5b-3597-4724-96f6-6207667e9d6f) <noreply@anthropic.com>
+Date:   Fri Aug 21 01:38:57 2026 -0400
+
+    make-helper-one: fix secondary-architecture build selection
+
+    The per-architecture binary loop (make_cross_build_platform_list with more
+    than one entry) skipped exactly the wrong builds.
+
+    all_package_debs_are_arch_all is 'true' only when EVERY binary a package
+    emits is 'Architecture: all'. The secondary-architecture skip must fire in
+    that case (the arch-all .debs were already produced while targeting the
+    first architecture), but it fired on 'false' -- so a package carrying an
+    'Architecture: any' binary was never built for any non-first architecture,
+    while a pure arch-all package was needlessly rebuilt under emulation.
+
+    - Invert the skip condition to 'true'.
+    - An excluded 'Architecture:' stanza produces no artifact for this target;
+      stop clearing the flag for it, so it no longer forces a pointless
+      secondary build.
+    - The secondary-build cleanup 'safe-rm -- .../*_all.deb' ran with nullglob
+      unset. A pure 'Architecture: any' package produces no '*_all.deb', so the
+      unmatched glob passed the literal pattern to safe-rm and aborted the build
+      under errexit. Collect real matches only. Newly reachable once the skip is
+      fixed.
+
+    Regression coverage: dist-ai genmkfile-tests/secondary_arch_build_test.sh.
+    Reported by CodeRabbit on org-ai-assisted/genmkfile PR #42.
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit 9af1390eceebcd75a284e2757435ca858989ddeb
+Merge: 7187d1a cc238e2
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Fri Aug 21 01:06:21 2026 -0400
+
+    Merge remote-tracking branch 'org-ai-assisted/ai'
+
+commit cc238e28a6ebc01a59d6868b3c5882950dc96aa0
+Merge: 536a925 7187d1a
+Author: claude (dev234 a7424670-04a4-40a9-abc0-6a72b7debfa2) <noreply@anthropic.com>
+Date:   Wed Aug 19 06:58:55 2026 -0400
+
+    Merge branch 'master' into ai (absorb upstream so the PR shows only our work)
+
+    # Conflicts:
+    #       usr/share/genmkfile/make-helper-one.bsh
+
+commit 536a925aa4660020a6fc86429a766f68de4c4012
+Author: claude (dev231 3574acba-a93b-4859-9c38-41a5f21bc1f2) <noreply@anthropic.com>
+Date:   Tue Aug 18 13:08:32 2026 -0400
+
+    skill: document the man-page convention
+
+    - `genmkfile manpages` renders man/*.ronn to auto-generated-man-pages/; commit
+      the output, regenerate on a .ronn change, no build-time ronn, dh_installman
+      only. This package's own debian/rules is the model.
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit 7187d1a9e3caefdcfcb05175829242fd110d2aeb
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Sat Aug 15 15:57:28 2026 +0000
+
+    bumped changelog version
+
 commit 4a392a1e2a1d82a9270f5dd5aea9673c844f6d10
 Merge: a562e7a ecbebfc
 Author: Patrick Schleizer <adrelanos@whonix.org>
@@ -24,6 +104,25 @@ Date:   Sat Aug 15 10:22:56 2026 -0400
 
     Merge remote-tracking branch 'ArrayBolt3/arraybolt3/trixie'
 
+commit a59397de09daebd72c748e68d131392261b34cf4
+Author: claude (dev206 b8d95043-6ec9-453b-b74e-00ba3a46cfdc) <noreply@anthropic.com>
+Date:   Thu Aug 13 05:10:56 2026 -0400
+
+    make_strip_build_residue: depth-floor the sweep, take stray .pyc/.pyo
+
+    The recursive residue sweep matched "${PWD}" itself, so a package root that
+    happens to be named __pycache__ (or .pytest_cache, ...) was handed to
+    safe-rm -r and wiped -- the debian/ guard does not exclude that case. Add
+    -mindepth 1 so the root is never a match.
+
+    Also sweep a stray .pyc/.pyo (including a symlink named so -- Python follows
+    it) that lives OUTSIDE any cache directory; the directory-only sweep left it
+    to mask edited source.
+
+    Regression: dist-ai genmkfile-tests/deb_cleanup_pyc_test.sh.
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
 commit 5aafc8b30e1679a1283c457ba353d0cd64d496f4
 Author: Aaron Rainbolt <arraybolt3@gmail.com>
 Date:   Wed Aug 12 21:50:53 2026 -0400
@@ -35,6 +134,405 @@ Author: Aaron Rainbolt <arraybolt3@gmail.com>
 Date:   Wed Aug 12 21:46:42 2026 -0400
 
     Improve cross-build support
+
+commit 5412e90fb10c5392275f27c4a6466825817fa45d
+Author: claude (dev179 34adc465-191d-4a9b-857a-2b62c4467b43) <noreply@anthropic.com>
+Date:   Mon Aug 10 12:06:37 2026 -0400
+
+    genmkfile: add missing shopt shift_verbose to make-helper-one.bsh guarded block
+
+commit 220d50666a52b3c9a516fc336c69c05e14cbbc46
+Author: claude (dev166 9381e85d-1ecd-45ca-9b11-d43120f634e1) <noreply@anthropic.com>
+Date:   Sat Aug 8 13:02:08 2026 -0400
+
+    dm-consumer: declare the tools the dist-ai suite shells out to
+
+    - moreutils supplies 'sponge', which make_debinstfile_create requires by name
+      ('make_require safe-rm sponge'). Undeclared, the debinstfile target died in CI
+      before generating anything, so the routing test failed for a missing tool
+      rather than a real defect.
+    - rsync and dctrl-tools are what 'install' and the binary-stanza walk shell out
+      to. Declared rather than relied on as incidentally present in the runner image
+      -- a test that passes only because of an undeclared package is one image
+      refresh away from a mystery failure.
+
+commit dd257907df9a165a5d88880e9e9186f66c1274fe
+Author: claude (dev166 9381e85d-1ecd-45ca-9b11-d43120f634e1) <noreply@anthropic.com>
+Date:   Sat Aug 8 12:57:33 2026 -0400
+
+    install: match the permission skip-list on path boundaries, not as a substring
+
+    - folder_permission_skip_list decides which files keep the mode they arrived
+      with. The lookup used array_match, a SUBSTRING test, so an entry of '/usr/src'
+      also matched '/usr/share/doc/x/usr/src-notes' and that file silently kept
+      whatever mode it had -- the quiet wrong-permission outcome again.
+    - Reproduced against the shipped function before fixing.
+    - path_is_within_any matches the path itself or the '/' boundary beneath it, so
+      '/usr/src/foo' still matches and '/usr/share/doc/x/usr/src-notes' no longer
+      does.
+    - array_match itself is untouched: it is generic, has no other caller here, and
+      a package's make-helper-overrides.bsh is sourced into this shell and may use
+      it.
+    - Covered in dist-ai genmkfile-tests/install_modes_test.sh: a file genuinely
+      under a skipped folder keeps mode 0600, one merely containing the text is
+      fixed to 0644. The second assertion fails on the substring predicate.
+
+commit a8c0fd08fbf36caa1947646dcb769e293bcf7419
+Author: claude (dev166 9381e85d-1ecd-45ca-9b11-d43120f634e1) <noreply@anthropic.com>
+Date:   Sat Aug 8 12:54:17 2026 -0400
+
+    uninstall: see dangling symlinks, so a leftover cannot report as a clean uninstall
+
+    - 'test -f' follows the link, so it is FALSE for a symlink whose target is gone.
+      uninstall therefore skipped such a file AND uninstallcheck then exited 0
+      reporting a clean uninstall with the file still on disk. Neither step said
+      anything: a false green on both.
+    - Reproduced before fixing: a relative in-tree symlink with a missing target is
+      installed by rsync --safe-links (it does not escape the tree), survives
+      'uninstall', and 'uninstallcheck' exits 0.
+    - genmkfile_path_present is file-or-symlink, NOT '-e': '-e' is also true for a
+      DIRECTORY, and the loop hands each hit to safe-rm, which then fails with
+      "Is a directory". Excluding directories is the part the old '-f' had right.
+      Verified -- that wrong turn aborts uninstall outright.
+    - Applied to uninstall, uninstallsim and uninstallcheck, which shared the
+      predicate.
+    - Covered by dist-ai genmkfile-tests/uninstall_completeness_test.sh (8 checks),
+      which asserts both halves. It fails on the old predicate ("left the dangling
+      symlink behind") and on the too-broad one ("Is a directory").
+
+commit 74227f6e49da1fcdbc28d8895b36840ccdbcae95
+Author: claude (dev166 9381e85d-1ecd-45ca-9b11-d43120f634e1) <noreply@anthropic.com>
+Date:   Sat Aug 8 12:10:52 2026 -0400
+
+    deb-cleanup: sweep artifacts that carry no Debian revision
+
+    - Every glob in the table required a literal '-', so two real shapes were never
+      matched:
+        <pkg>_1.0.orig.tar.xz   the upstream tarball is named from make_pkg_version
+                                WITHOUT the revision, so it never has a hyphen
+        <pkg>_2.0_all.deb       a version with no Debian revision
+      Verified against real artifacts, not hypothesised.
+    - Effect: every PREVIOUS version's orig tarball accumulated in DISTDIR forever.
+      The CURRENT one was removed by the exact-path fallback at the end of the
+      function, which is exactly what hid the defect. A revision-less .deb was never
+      swept at all, leaving a stale binary for a later build to publish or install.
+      DISTDIR is the .deb cache deb-pkg and reprepro read from.
+    - The leading '<pkg>_' still anchors each pattern, so a sibling package is
+      untouched: '<pkg>-extra_1.0-1_all.deb' does not match '<pkg>_'*.
+    - Covered by dist-ai genmkfile-tests/deb_cleanup_artifacts_test.sh: a seeded
+      DISTDIR asserting 11 artifacts are swept AND 4 belonging to other packages
+      survive. 2 assertions fail on the old table; over-deletion would fail the
+      other 4.
+    - Verified: full genmkfile suite green, and a real cowbuilder deb-pkg build
+      still produces exactly the expected artifact set.
+
+commit 329e2443119b761438707ba8c175d5c58744d39d
+Author: claude (dev166 9381e85d-1ecd-45ca-9b11-d43120f634e1) <noreply@anthropic.com>
+Date:   Sat Aug 8 11:47:23 2026 -0400
+
+    drop the vendored test suite: component tests live in dist-ai
+
+    - usr/share/genmkfile-tests/ held two suites that belong in the dist-ai
+      genmkfile-tests suite, which already exists and already has a runner.
+    - Both moved there unchanged in assertions, re-pointed at the subject the way
+      that suite does (GENMKFILE_SHARE -> /usr/share/genmkfile -> the dm checkout),
+      and verified green before removal here.
+
+commit ca1e28b57be9bcd980030a514bf10e27efc4092a
+Author: claude (dev166 9381e85d-1ecd-45ca-9b11-d43120f634e1) <noreply@anthropic.com>
+Date:   Sat Aug 8 11:31:42 2026 -0400
+
+    version parsing: take the revision from the LAST hyphen, and strip it before arithmetic
+
+    Both found by CodeRabbit review on the PR; both verified against the code and
+    reproduced before fixing.
+
+    - Debian permits hyphens in the upstream version and defines the revision as the
+      part after the LAST hyphen. The revision was taken from the FIRST hyphen while
+      the version stripped at the last one, so the halves disagreed: '1.0-beta-1'
+      gave version '1.0-beta' and revision '-beta-1', and every derived name came
+      out '1.0-beta-beta-1' (.dsc, .orig.tar.xz, .debian.tar.xz, .changes, each
+      .deb). Ordinary '0.1-1' and epoch forms are unaffected.
+    - make_pkg_revision carries its leading hyphen on purpose, because callers
+      concatenate it straight into artifact names. The major-bump path fed it to bc
+      as-is, so 'scale=9 ; -1 + 1' returned 0 and a bump of '1.0-1' produced '1.0-0'
+      -- a downgrade debchange rejects. Stripped before the arithmetic; an empty
+      revision now bumps to 1 rather than being a syntax error.
+    - The split moves into make_parse_changelog_version so it can be exercised
+      directly. No behaviour change from the extraction itself.
+    - genmkfile-tests/test_version_parse.sh: 12 checks over the shapes named in
+      make_get_variables' own comment plus the hyphenated ones, including a
+      round-trip that rebuilds the input the way callers do. 4 fail on the old
+      split, naming '1.0-beta-1 -> 1.0-beta-beta-1'.
+    - Verified: gate green, both genmkfile test suites green, and a real cowbuilder
+      deb-pkg build still produces private-ai-config_0.1-1_all.deb.
+
+commit 944fc03b98e8ba7d6af0df90d08f72682d946e0f
+Author: claude (dev166 9381e85d-1ecd-45ca-9b11-d43120f634e1) <noreply@anthropic.com>
+Date:   Sat Aug 8 11:17:18 2026 -0400
+
+    genmkfile: finish the SC2250 / R-010 sweep across the remaining shell files
+
+    - make-helper.bsh and shared.bsh were the last two files still carrying SC2250
+      (25 and 3). Braced by shellcheck's own '--format=diff' auto-fix, not by hand.
+    - make-helper.bsh: completes the strict-mode block with 'shopt -s shift_verbose'
+      and anchors 'source=SCRIPTDIR/shared.bsh' to './shared.bsh' (R-080). The file
+      contains no 'shift', so shift_verbose changes nothing at runtime.
+    - shared.bsh: takes the documented no-strict exemption instead of a strict
+      block. It is sourced-only, so setting errexit / nounset / pipefail there would
+      leak them into the sourcing shell -- the same reason make-helper-one.bsh
+      carries that marker.
+    - The whole repo now passes the gate, so a future one-line change is no longer
+      blocked by inherited debt in whatever file it touches.
+    - Verified: bash -n clean, 0 SC2250 repo-wide, genmkfile's own test suite green,
+      and a real cowbuilder 'deb-pkg' build of an unrelated package exits 0.
+
+commit 6a702df446579ce5d2ebf49899d1a65e8519b44f
+Author: claude (dev163 38f9745c-aed1-4fb4-b6ae-9899f20f8de2) <noreply@anthropic.com>
+Date:   Sat Aug 8 10:54:40 2026 -0400
+
+    deb-cleanup: only strip residue in a package source root
+
+    - The rest of this file also assumes PWD is the package root, but those
+      functions delete a handful of specifically named artifacts. This one deletes
+      RECURSIVELY, so being invoked from the wrong directory would remove every
+      __pycache__ beneath it rather than a few named files.
+    - Skip, with a message, when there is no debian/ directory. Skipping rather
+      than dying keeps an unexpected context from breaking a build, and the
+      message says why nothing was stripped.
+
+    Canaried: disabling the guard fails exactly the no-debian case.
+
+    ## AI-Assisted
+
+    Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+commit 1b237a6ca15ba60e4b7fd63ac0afd94243f44ae1
+Author: claude (dev163 38f9745c-aed1-4fb4-b6ae-9899f20f8de2) <noreply@anthropic.com>
+Date:   Sat Aug 8 10:52:57 2026 -0400
+
+    deb-cleanup: also strip .pytest_cache
+
+    - The helper comment named pytest as a residue source but the find expression
+      did not match .pytest_cache, so a pytest run could still leave a cache in the
+      packaged tree and fail the lintian check the strip exists to prevent.
+    - Test gains a .pytest_cache fixture and removal assertion.
+
+    Canaried: neutralising the .pytest_cache name fails exactly that one case.
+
+    Found by coderabbit.
+
+    ## AI-Assisted
+
+    Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+commit 0dc4188d185f221c4e0841e6584f6ca47bb6075f
+Author: claude (dev163 38f9745c-aed1-4fb4-b6ae-9899f20f8de2) <noreply@anthropic.com>
+Date:   Sat Aug 8 10:20:18 2026 -0400
+
+    deb-cleanup: strip python build residue before packaging
+
+    - Packaging copies the WORKING TREE, not git's view, so a .mypy_cache or
+      __pycache__ left in the source tree by in-tree linting is shipped inside the
+      .deb even though it is already in .gitignore. lintian then fails the build
+      closed on package-contains-python-dot-directory.
+    - Strip .mypy_cache, __pycache__ and .hypothesis in make_deb_cleanup, which
+      runs before the tree is packaged.
+    - '.git' is pruned so a residue-named directory inside it cannot be deleted.
+    - '-prune' on a match stops find descending into a directory it is about to
+      delete, so nested residue cannot produce stale entries.
+    - Removed paths are printed: a silent sweep in a build tool is
+      indistinguishable from one that removed the wrong thing.
+    - find runs in the foreground rather than through 'while read < <(find ...)':
+      process substitution hides find's exit status, so under errexit a broken
+      find would strip nothing while the build continued looking clean.
+
+    Test asserts BOTH directions -- residue removed, and real sources, a
+    similarly-named directory and .git contents left alone. Canaried: gutting the
+    removal fails exactly the three residue cases; dropping the .git prune fails
+    exactly the .git case.
+
+    ## AI-Assisted
+
+    Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+commit 98ee6efe86c624ef357eaaf36df73d46098914d4
+Author: claude (dev166 9381e85d-1ecd-45ca-9b11-d43120f634e1) <noreply@anthropic.com>
+Date:   Sat Aug 8 10:13:20 2026 -0400
+
+    cowbuilder: clear the inherited temp-dir vars so libpam-tmpdir stops breaking builds
+
+    - libpam-tmpdir sets TMPDIR=/tmp/user/0 for sudo's root session. pbuilder passes
+      it into the chroot, where that path does not exist, and the build dies with
+      "dpkg-deb: error: failed to make temporary file (control member)" during
+      pbuilder-satisfydepends. Debian #823651.
+    - Enables the --unset block that was already written here and commented out,
+      placed after sudo: sudo's env_reset discards anything set on the calling side,
+      so the same assignment earlier would silently do nothing.
+    - Callers no longer need a per-machine --configfile purely to work around this.
+      Verified: 'genmkfile deb-pkg' with make_use_cowbuilder=true and NO --configfile
+      builds green on a libpam-tmpdir host; without the fix the same invocation fails
+      with the dpkg-deb error above.
+    - A private per-build temp dir is not an option and the comment now says so:
+      TMPDIR crosses into the chroot, so a host-side mktemp path does not exist
+      there. Measured -- it reproduces the identical dpkg-deb failure.
+
+commit 63cb85096d7bccb9fa103aef5fc90720ad6dc8d1
+Author: claude (dev166 9381e85d-1ecd-45ca-9b11-d43120f634e1) <noreply@anthropic.com>
+Date:   Sat Aug 8 10:12:44 2026 -0400
+
+    make-helper-one: brace variable references (SC2250) and anchor the source directive
+
+    - Mechanical only, no behaviour change. Separated from the fix that follows so
+      that one stays reviewable.
+    - Generated by shellcheck's own '--format=diff' auto-fix, not by hand, so the
+      substitutions are exactly what the checker asks for: 322 lines.
+    - R-080: 'source=SCRIPTDIR/shared.bsh' -> './shared.bsh'; the directive must be
+      relative and anchored.
+    - Verified: bash -n clean, shellcheck reports 0 SC2250, and a real
+      'genmkfile deb-pkg' cowbuilder build of an unrelated package still exits 0.
+
+commit 27ef52a4ba78e38b654068a8b96c4707767fc5c8
+Author: claude (dev163 38f9745c-aed1-4fb4-b6ae-9899f20f8de2) <noreply@anthropic.com>
+Date:   Fri Aug 7 22:28:14 2026 -0400
+
+    genmkfile: diagnostics to stderr
+
+    The makefile-full failure block wrote its error text, the 'ls -la' listing and
+    the chmod remediation to STDOUT. genmkfile's stdout is consumed by callers, so a
+    make wrapper reading it received the diagnostics as if they were data.
+
+    The detection-failure branch above already used '>&2'; this block did not.
+
+    Found by coderabbit.
+
+    Testing
+    -------
+
+    Gate exit 0 in an ISOLATED checkout.
+
+      4 pass, 0 fail
+
+      GENMKFILE_PATH unset, ./usr/share found   same
+      GENMKFILE_PATH set explicitly             same
+      makefile-full present but UNREADABLE      differ
+      GENMKFILE_PATH directory unlistable (000) differ
+
+    The last two are asserted to DIFFER: they are the cases that run the block, so
+    moving it between streams must be visible there and nowhere else.
+
+    Canary: removing the eight redirects gives 2 pass / 2 fail, failing exactly
+    those two.
+
+    Two harness changes were needed to see this at all:
+    - stdout and stderr are captured SEPARATELY now. Merged with '2>&1' a diagnostic
+      moving from one stream to the other is invisible -- the harness reported
+      '4 same, 0 differing' for a change that moved every line in the block.
+    - '$?' is read immediately after the command. Appending the stderr capture first
+      made 'status' the exit code of that assignment rather than of genmkfile.
+
+    And the fixture had gone stale: the earlier refresh was short-circuited by a
+    failing shellcheck in the same '&&' chain, so the run compared against the
+    previous build. refresh-fixture.sh exists for exactly this and has to actually
+    run.
+
+commit 5e90e7f664b013cfb75de24447f52aebb5f919cc
+Author: claude (dev163 38f9745c-aed1-4fb4-b6ae-9899f20f8de2) <noreply@anthropic.com>
+Date:   Fri Aug 7 13:54:34 2026 -0400
+
+    genmkfile: keep the permission diagnostic best-effort under errexit
+
+    The makefile-full-unreadable branch runs 'ls -la' as a debugging aid, then
+    prints the chmod remediation, then falls through to make-helper.bsh -- it warns,
+    it does not stop.
+
+    Under the errexit added in the previous commit, a GENMKFILE_PATH directory the
+    caller cannot list makes that 'ls' fail and aborts the script right there. The
+    chmod remediation -- the one output that actually helps -- is swallowed, and the
+    make-helper.bsh attempt this branch deliberately still makes never happens. The
+    very permission problem the diagnostic exists to show is what kills it.
+
+    '|| true' on the ls, with the reason in a comment.
+
+    Testing
+    -------
+
+    The earlier harness did NOT catch this: its 'unreadable' case chmod 0000's
+    makefile-full but leaves the DIRECTORY listable, so the 'ls' succeeds and the
+    abort never fires. A case for the unlistable directory is added.
+
+      4 same, 0 differing
+
+    Canary: removing the '|| true' gives 3 same, 1 differing, and only the new case
+    moves -- old exit 126 (master reached make-helper.bsh and was denied), new exit
+    2 (aborted at the ls).
+
+    Found by codex and agy independently.
+
+    Gate exit 0 in an isolated checkout.
+
+commit 855235ea235121b1f0941c6a3e254a6cb64daad1
+Author: claude (dev163 38f9745c-aed1-4fb4-b6ae-9899f20f8de2) <noreply@anthropic.com>
+Date:   Fri Aug 7 13:44:00 2026 -0400
+
+    genmkfile: R-010 strict mode
+
+    usr/bin/genmkfile locates GENMKFILE_PATH -- from the environment, or by probing
+    three candidate directories -- and hands off to make-helper.bsh.
+
+    Real nounset trap
+    -----------------
+
+    GENMKFILE_PATH is read by 'if [ "$GENMKFILE_PATH" = "" ]', the test whose whole
+    job is to detect it being unset. Under nounset that aborted before the probing
+    could run at all, so genmkfile would not work unless the caller had already
+    exported the variable it exists to derive.
+
+    The detection-failure branch now stops
+    ----------------------------------------
+
+    It printed "Auto detection of GENMKFILE_PATH failed!" and CARRIED ON: into
+    'realpath ""', then a makefile-full check against an empty path, then
+    make-helper.bsh invoked with nothing -- a cascade of follow-on errors after the
+    real one had already been reported. It now exits 1 there, and the message goes
+    to stderr.
+
+    Also 7 'echo' -> printf (R-034) and '--' before the realpath, ls, cd, dirname
+    and pushd operands.
+
+    Testing
+    -------
+
+    Gate exit 0 in an ISOLATED checkout.
+
+      3 same, 0 differing
+
+    Three cases: GENMKFILE_PATH unset with a discoverable share directory,
+    GENMKFILE_PATH set explicitly, and makefile-full present but UNREADABLE.
+
+    Canary: removing the '${GENMKFILE_PATH:-}' default gives 1 same, 2 differing --
+    both unset cases abort.
+
+    NOT COVERED, and worth saying so: the detection-FAILURE path. Removing the
+    fixture's share directory does not make detection fail, because the third
+    candidate is the absolute '/usr/share/genmkfile', which exists on any machine
+    with genmkfile installed -- including the test host. A case built that way
+    silently exercises the SYSTEM installation instead of the fixture, and the two
+    variants then differ for reasons unrelated to the change. Covering it needs the
+    system path hidden:
+      bwrap --dev-bind / / --tmpfs /usr/share/genmkfile -- <the script>
+    The harness says this in a comment where the case would otherwise have gone.
+
+commit 50b07c3668d0ef9fdd90eb8a875f6faca0da9b57
+Merge: f68990e ecbebfc
+Author: claude (dev163 38f9745c-aed1-4fb4-b6ae-9899f20f8de2) <noreply@anthropic.com>
+Date:   Fri Aug 7 13:42:18 2026 -0400
+
+    Merge org-ai-assisted/master into ai
+
+    The branch was created from a stale local master, so its PR diff showed
+    master's newer commits -- including a changelog version bump -- as REMOVALS.
+    Merging rather than rebasing, per the no-history-rewrites rule.
 
 commit ecbebfc49cc892674b2873d9718b621f0c19dfd7
 Merge: abdc546 163213f
