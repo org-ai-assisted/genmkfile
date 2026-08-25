@@ -194,3 +194,32 @@ sudo cowbuilder --create \
 - But `sudo`'s `env_reset` strips both, so anything run via `sudo` inside the chroot runs **without** cowdancer -- its writes/unlinks hit the hardlinked-into-base inode directly and **corrupt the shared base**.
 - Harmless for a one-shot `--execute` (the buildplace is discarded), but do NOT reuse a base across runs if a non-cowdancer step mutated files in it (e.g. `VBoxManage unregistervm --delete` deleting a VM whose disk/registry are hardlinked into the base).
 - This is also why a root command run via `sudo` inside the chroot can fail with `cp: ... Cannot allocate memory`: `libcowdancer` stays `LD_PRELOAD`'ed while `COWDANCER_ILISTFILE` is gone, leaving the COW layer half-initialized -- run such commands directly (without sudo) so the inherited cowdancer env stays intact.
+
+## Build facts (host-generator, TMPDIR, changelog)
+
+- **genmkfile is a HOST-SIDE generator, NOT a Build-Depends.** It writes `debian/*.install`
+  before the source package is packed; `debian/rules` is a plain `dh $@`, so nothing in the
+  build chroot invokes it -- Build-Depends is debhelper-only. A stray `genmkfile` build-dep is
+  the ONLY reason a package can't resolve deps on a plain deb.debian.org base (genmkfile lives
+  only in the kicksecure repo). Drop it; the build needs no local-repo/OTHERMIRROR/D-hook.
+- **libpam-tmpdir TMPDIR break** (a genmkfile bug, all users): libpam-tmpdir (Kicksecure
+  default) gives sudo's root session `TMPDIR=/tmp/user/0`, which cowbuilder forwards INTO the
+  chroot where that dir is absent -> `dpkg-deb: failed to make temporary file` ->
+  `pbuilder-satisfydepends failed`. Do NOT remove libpam-tmpdir (a hack). Per-build workaround
+  (genmkfile's own knob, inserted before cowbuilder): `export COWBUILDER_PREFIX="env
+  --unset=TMPDIR --unset=TMP --unset=TEMP --unset=TEMPDIR"`. The real fix (unset AFTER sudo) is
+  commented out in released genmkfile 3:21.9-1 -- it is org-ai-assisted/genmkfile `ai` PR #42
+  (pending). `make_use_cowbuilder=true` AND `make_cowbuilder_dist_folder` are BOTH required or
+  the cowbuilder-guard refuses it as an in-place build. Base is
+  `/var/cache/pbuilder/base.cow_amd64` (`cow.cow_amd64` is scratch); `/var` resets at boot so
+  recreate (~4min: `cowbuilder --create --basepath ... --distribution trixie --mirror
+  https://deb.debian.org/debian`). `make_use_lintian=false` skips pre-existing findings. Confirm
+  `git status` clean first (`genmkfile dist` tars the WORKING tree).
+- **NEVER hand-edit `debian/changelog`** in genmkfile packages -- it is AUTO-GENERATED and
+  gate-enforced (`check_changelog_no_manual`): a commit touching it HARD-FAILS unless it is a
+  genmkfile auto-bump (exact subject `bumped changelog version` + a changelog-family-only diff)
+  or carries `Changelog-manual-ok: <reason>` (prefer the bump). Workflow: (1) commit code only;
+  (2) `genmkfile deb-chl-bumpup-major` (needs `export DEBFULLNAME DEBEMAIL` first -- the
+  Bash-tool shell is non-interactive; it bumps upstream 0.1->0.2->...->1.0 and resets the
+  revision to `-1`, the Kicksecure convention, NOT a `-N` bump); (3) commit the changelog with
+  that exact subject.
