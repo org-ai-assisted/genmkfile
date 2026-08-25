@@ -1126,6 +1126,9 @@ make_deb_shared_dep() {
   make_output_info "running: ${msg}"
 
   apt_get_exit_code="0"
+  ## style-ok: allow-downgrades -- installing build-deps may need a downgrade to
+  ## the pinned/frozen version (here and at the second apt-get); deliberate, not
+  ## the vulnerability-introducing use R-212 targets.
   ## $make_deb_shared_dependencies is intentionally unquoted: the
   ## extractor produces a space-separated package list and apt-get
   ## expects one argument per package.
