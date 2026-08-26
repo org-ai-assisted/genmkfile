@@ -1,3 +1,28 @@
+commit 898ce451405bf3e4b7507fad88bf5a4f6913f822
+Merge: 4765659 225d8e3
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Tue Aug 25 09:43:48 2026 -0400
+
+    Merge remote-tracking branch 'refs/remotes/org-ai-assisted/ai'
+
+commit 225d8e369f432efad42473e102721e69b2ff8e87
+Author: assisted-by-ai (Bot Account) (Machine Account) <228987186+assisted-by-ai@users.noreply.github.com>
+Date:   Mon Aug 24 23:29:45 2026 -0400
+
+    ci: drop orphaned consumer-codex-review.yml (reusable decommissioned)
+
+commit fd67beb9f6b421771b5c84f980793e8457075337
+Author: assisted-by-ai (Bot Account) (Machine Account) <228987186+assisted-by-ai@users.noreply.github.com>
+Date:   Mon Aug 24 23:29:42 2026 -0400
+
+    ci: drop orphaned consumer-claude-code.yml (reusable decommissioned)
+
+commit 47656599d06690ba129fb740710ca27706c63d52
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Fri Aug 21 08:56:51 2026 +0000
+
+    bumped changelog version
+
 commit 8752b187756c5f74b193c61f06db7546dcd63df3
 Merge: 9af1390 e4c049f
 Author: Patrick Schleizer <adrelanos@whonix.org>
