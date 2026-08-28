@@ -1507,11 +1507,18 @@ make_lintian() {
     ## --suppress-tags orig-tarball-missing-upstream-signature
     ##
     ## Removed '--suppress-tags package-supports-alternative-init-but-no-init.d-script' for Trixie, tag no longer exists.
+    ##
+    ## lintian's matcher only recognizes 'set -e' (and shebang '-e'), not the
+    ## POSIX-equivalent 'set -o errexit' that our bash style (R-010) mandates,
+    ## so any maintainer script using the strict preamble falsely trips
+    ## 'maintainer-script-ignores-errors'. Suppress it globally.
+    ## --suppress-tags maintainer-script-ignores-errors
     export DEBUILD_LINTIAN_OPTS="\
          --suppress-tags missing-tests-control \
          --suppress-tags systemd-service-file-missing-documentation-key \
          --suppress-tags orig-tarball-missing-upstream-signature \
          --suppress-tags no-manual-page \
+         --suppress-tags maintainer-script-ignores-errors \
          --quiet \
          --pedantic \
          --info \
