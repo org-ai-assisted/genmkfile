@@ -1180,7 +1180,7 @@ make_deb_all_dep() {
 }
 
 make_deb_pkg_build_shared() {
-  local cow_folder base_folder aptcache_folder package
+  local cow_folder base_folder package
   local -a make_cowbuilder_config_file_arg=()
 
   ## See if we even need to do a build. Architecture-independent ('all')
@@ -1252,8 +1252,6 @@ beforehand?"
     ## 'base.cow_<arch>' is shared safely (cowbuilder only reads it to seed each snapshot).
     cow_folder="${cowbuilder_cache_dir}/cow.cow_${target_architecture}${make_cow_suffix:-}"
     base_folder="${cowbuilder_cache_dir}/base.cow_${target_architecture}"
-    ## pbuilder's default APTCACHE location; shared across builds under this cache dir.
-    aptcache_folder="${cowbuilder_cache_dir}/aptcache"
 
     ## Guard on readability, not just non-empty: a caller may point this at the dm-generated
     ## '~/derivative-binary/pbuilder.conf', which exists only AFTER a dm build has run. Skip
@@ -1362,14 +1360,6 @@ beforehand?"
       cowbuilder_target_architecture="${target_architecture}"
       cowbuilder_host_architecture_maybe=""
     fi
-
-    ## pbuilder bind-mounts $aptcache_folder over the chroot's /var/cache/apt/archives, and
-    ## apt stages every download into that dir's 'partial/' subdir. A missing 'partial/'
-    ## makes EVERY fetch fail with "Could not open file .../partial/<pkg>.deb - No such file
-    ## or directory" and aborts pbuilder-satisfydepends before the build starts. apt does not
-    ## recreate it here, and an 'apt-get clean' or an interrupted build can remove it, so
-    ## guarantee it per build. Idempotent; harmless when it already exists.
-    make_log_and_run sudo mkdir --parents -- "${aptcache_folder}/partial"
 
     # shellcheck disable=SC2086
     ## After 'sudo', not before: sudo's env_reset discards anything set on the calling
