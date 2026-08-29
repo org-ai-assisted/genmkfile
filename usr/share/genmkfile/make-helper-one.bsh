@@ -1860,6 +1860,17 @@ make_helper() {
   genmkfile_rsync_opts+=("--links")         ## copy symlinks as symlinks
   genmkfile_rsync_opts+=("--hard-links")    ## preserve hard links
   genmkfile_rsync_opts+=("--safe-links")    ## ignore symlinks that point outside the tree
+  ## Never install build residue. 'make install' does not run
+  ## make_strip_build_residue (only the 'deb' cleanup path does), so a source
+  ## tree that accumulated a bytecode/tooling cache -- e.g. a package that ships
+  ## '.py' with '-B' and never wants '.pyc' -- would otherwise get that cruft
+  ## rsync'd straight into the target. Exclude the same set the strip removes.
+  genmkfile_rsync_opts+=("--exclude=__pycache__")
+  genmkfile_rsync_opts+=("--exclude=*.pyc")
+  genmkfile_rsync_opts+=("--exclude=*.pyo")
+  genmkfile_rsync_opts+=("--exclude=.mypy_cache")
+  genmkfile_rsync_opts+=("--exclude=.pytest_cache")
+  genmkfile_rsync_opts+=("--exclude=.hypothesis")
   #genmkfile_rsync_opts+=("--progress")
   #genmkfile_rsync_opts+=("--verbose")
 
