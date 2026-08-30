@@ -209,6 +209,14 @@ make_parse_cmd() {
     return 0
   fi
 
+  ## A valid target ran, then the loop broke on an argument that is NOT a target. It was
+  ## previously dropped SILENTLY -- 'genmkfile install deb-cleanuptypo' installed and reported
+  ## success while never running the misspelled target. Fail loud instead. (A run of purely
+  ## VALID targets leaves nothing here; 'all' consumes its trailing args itself.)
+  if [ "${matched}" = "true" ] && [ $# -gt 0 ]; then
+    die 1 "unrecognized target '$1' (every argument must be a genmkfile target; run 'genmkfile help')"
+  fi
+
   if ! [ "${matched}" = "true" ]; then
     make_function_run "$@"
   fi
@@ -1553,9 +1561,14 @@ make_lintian_on_warning() {
     make_output_warn "lintian warning. make_lintian_fail_open_versus_closed=open - failing open."
     return 0
   fi
-  make_output_error "lintian warning. make_lintian_fail_open_versus_closed is not set to 'open' - failing closed."
-  ## If lintian itself exited 0 but we got here because of warning
-  ## output, still exit 1 to signal the failure.
+  make_output_error "\
+lintian produced the output above and genmkfile fails closed on ANY of it. The default lintian
+opts add --info/--display-info/--pedantic, so even a purely INFORMATIONAL ('N:') note aborts the
+build here, not only a warning or error. To proceed, pick one:
+  - fix the reported finding(s); or
+  - build with 'make_lintian_fail_open_versus_closed=open' to WARN instead of fail; or
+  - build with 'make_use_lintian=false' to skip lintian entirely."
+  ## lintian may exit 0 while still emitting output; treat any output as a failure signal.
   [ "${lintian_exit_code}" = "0" ] && lintian_exit_code=1
   exit "${lintian_exit_code}"
 }
