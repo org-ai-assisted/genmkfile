@@ -73,8 +73,13 @@ make_output_error() {
 }
 
 die() {
+  ## First arg is the exit code (every call site passes one); the rest is the message.
+  ## Without the shift it leaked into make_output_error as a spurious leading token
+  ## ("ERROR: 1 <msg>") and the code was ignored.
+  local exit_code="$1"
+  shift
   make_output_error "${@}"
-  exit 1
+  exit "${exit_code}"
 }
 
 make_require() {
