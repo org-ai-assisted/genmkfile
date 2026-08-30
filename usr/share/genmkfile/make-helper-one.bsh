@@ -215,25 +215,27 @@ make_parse_cmd() {
 }
 
 make_dependencies_filter_helper() {
-  local temp to_remove
-  ## Read a Debian dependency expression on stdin, write a clean
-  ## space-separated package name list to stdout. Strips:
+  local temp
+  ## Read a Debian dependency expression on stdin, write a clean space-separated package name
+  ## list to stdout. Strips (all via sed, so the whole stream is covered, not a fixed list):
   ##   - commas (separator)
-  ##   - version constraints like '(>= 1.0)'
-  ##   - architecture qualifiers like '[linux-any]' / '[!linux-any]'
-  ##   - debhelper substitution markers (${shlibs:Depends} etc.)
-  ##   - '|' alternative-dep markers
-  ## NOTE: an 'A | B' alternative keeps BOTH names (not just the first). Reducing it to the
+  ##   - version constraints '(>= 1.0)'
+  ##   - architecture qualifiers '[linux-any]' / '[!linux-any]'
+  ##   - build-profile restrictions '<!nocheck>'
+  ##   - substitution markers '${shlibs:Depends}' and any other '${...}'
+  ## and reduces '|' to a SPACE (not empty, so a space-less 'A|B' tokenizes as two names).
+  ## NOTE: an 'A | B' alternative keeps BOTH names, not just the first. Reducing it to the
   ## first alternative correctly needs a real Debian-dependency parser -- folding may occur
   ## anywhere, alternatives carry per-arch and build-profile qualifiers, and grep-dctrl packs
   ## multiple binary stanzas newline-separated -- so a bash reimplementation reliably regresses
   ## one of those. Kept flat and simple on purpose (see the git skill's no-bash-parser rule).
-  temp="$(sed -e 's/,/ /g' -e 's/([^)]*)//g' -e 's/\[[^]]*\]//g')"
-  ## These are debhelper substitution markers, literal in debian/control.
-  # shellcheck disable=SC2016
-  for to_remove in '${shlibs:Depends}' '${misc:Depends}' '${python:Depends}' '${python3:Depends}' '|'; do
-    temp="${temp//"${to_remove}"/""}"
-  done
+  temp="$(sed \
+    -e 's/,/ /g' \
+    -e 's/([^)]*)//g' \
+    -e 's/\[[^]]*\]//g' \
+    -e 's/<[^>]*>//g' \
+    -e 's/\${[^}]*}//g' \
+    -e 's/|/ /g')"
   printf "%s\n" "${temp}"
 }
 
@@ -495,8 +497,11 @@ make_get_variables() {
         package="${line#Package: }"
         current_field="package"
         ;;
-      "Architecture: "*)
-        binary_package_architecture="${line#Architecture: }"
+      "Architecture:"*)
+        ## No required space after the colon: a BARE 'Architecture:' whose value is entirely on
+        ## a continuation line must still set current_field, or the value is never associated.
+        ## The leading blank ('Architecture: all') is stripped by the read-normalisation below.
+        binary_package_architecture="${line#Architecture:}"
         current_field="architecture"
         ;;
       "")
@@ -1046,7 +1051,18 @@ make_debinstfile_create() {
         filename_without_dot="${file_name#./}"
         filename_without_hash="${file_name%%#*}"
         cleaned_filename_without_hash="${filename_without_hash/#.\//\/}"
-        pkg_name="${file_name#*#}"
+        ## The package name is the BASENAME's part after its last '#'. Deriving it from the
+        ## whole path ('${file_name#*#}') let a PARENT directory containing '#..' inject '../'
+        ## into temp_deb_install_file below -- an arbitrary-file write/delete OUTSIDE
+        ## genmkfile_temp_dir (verified: a source tree with 'x#../pwned#pkg' escaped the temp
+        ## dir as root). A basename cannot contain '/', and the value is validated besides.
+        pkg_name="${file_name##*/}"
+        pkg_name="${pkg_name##*#}"
+        case "${pkg_name}" in
+          '' | *'/'* | '.' | '..')
+            die 1 "invalid package name '${pkg_name}' from multi-package filename '${file_name}' (expected '<path>#<pkgname>')"
+            ;;
+        esac
         temp_deb_install_file="${genmkfile_temp_dir}/${pkg_name}.install"
 
         if [ -z "${delete_yet[${pkg_name}]:-}" ]; then
@@ -1978,21 +1994,20 @@ make_helper() {
         ## packaging bug. (A non-symlink source whose destination is somehow
         ## missing falls through to 'stat' below and aborts under
         ## 'set -o errexit' - also loud.)
-#         if [ -L "$source_fso" ]; then
-#           local source_fso_link_target destination_link_target
-#           source_fso_link_target="$(readlink -- "$source_fso")"
-#           destination_link_target="$(readlink -- "$file_with_destdir" 2>/dev/null || true)"
-#           if [ "$source_fso_link_target" != "$destination_link_target" ]; then
-#             die 1 "refusing to install: symlink '$source_fso' -> '$source_fso_link_target' was not installed at '$file_with_destdir'. A symlink pointing outside the copied tree (absolute, or via '..') is skipped by 'rsync --safe-links' - make it a relative in-tree symlink."
-#           fi
-#           ## Destination is the copied symlink (identical target). If its in-tree
-#           ## target is absent (a dangling symlink) it cannot be chmod'ed
-#           ## meaningfully - chmod follows to the missing target - so skip it
-#           ## rather than let 'stat' below abort.
-#           if [ ! -e "$file_with_destdir" ]; then
-#             continue
-#           fi
-#         fi
+        if [ -L "${source_fso}" ]; then
+          local source_fso_link_target destination_link_target
+          source_fso_link_target="$(readlink -- "${source_fso}")"
+          destination_link_target="$(readlink -- "${file_with_destdir}" 2>/dev/null || true)"
+          if [ "${source_fso_link_target}" != "${destination_link_target}" ]; then
+            die 1 "refusing to install: symlink '${source_fso}' -> '${source_fso_link_target}' was not installed at '${file_with_destdir}'. A symlink pointing outside the copied tree (absolute, or via '..') is skipped by 'rsync --safe-links' -- make it a relative in-tree symlink."
+          fi
+          ## Destination is the copied symlink (identical target). A dangling in-tree symlink
+          ## cannot be meaningfully chmod'ed (chmod follows to the missing target), so skip it
+          ## rather than let the 'stat' below abort under errexit.
+          if [ ! -e "${file_with_destdir}" ]; then
+            continue
+          fi
+        fi
 
         ## Need to check first if it is a file...
         ## ...before checking if it is an executable.
