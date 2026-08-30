@@ -215,41 +215,26 @@ make_parse_cmd() {
 }
 
 make_dependencies_filter_helper() {
-  ## Read a Debian dependency expression on stdin, write a clean space-separated package name
-  ## list to stdout. Drops version constraints '(...)', architecture qualifiers '[...]', and
-  ## debhelper substitution markers '${...}' (e.g. ${shlibs:Depends}).
-  local raw item alts name
-  local -a names=()
-  raw="$(cat)"
-  ## Split into dependency ITEMS on BOTH commas AND newlines: grep-dctrl emits one paragraph
-  ## PER BINARY STANZA separated by NEWLINES with no comma, while within a stanza deps are
-  ## comma-separated (possibly folded across continuation lines). Folding newlines into the
-  ## comma stream would merge the last dep of one stanza with the first of the next and drop
-  ## packages. 'tr' turns each comma into a newline; existing newlines already split.
-  while IFS= read -r item; do
-    case "${item}" in
-      *'|'*'['*']'* | *'['*']'*'|'* )
-        ## ALTERNATIVE group carrying an architecture qualifier '[arch]': keep ALL alternatives.
-        ## Choosing by position could pick a wrong-arch package and break the build; apt/dpkg
-        ## install the one that applies.
-        alts="${item//|/ }"
-        ;;
-      *'|'* )
-        ## Plain alternative group ('A | B', often mutually exclusive): keep the FIRST only.
-        alts="${item%%|*}"
-        ;;
-      * )
-        alts="${item}"
-        ;;
-    esac
-    alts="$(printf '%s' "${alts}" \
-      | sed -e 's/([^)]*)//g' -e 's/\[[^]]*\]//g' -e 's/\${[^}]*}//g')"
-    # shellcheck disable=SC2086
-    for name in ${alts}; do
-      names+=("${name}")
-    done
-  done < <(printf '%s\n' "${raw}" | tr ',' '\n')
-  printf '%s\n' "${names[*]}"
+  local temp to_remove
+  ## Read a Debian dependency expression on stdin, write a clean
+  ## space-separated package name list to stdout. Strips:
+  ##   - commas (separator)
+  ##   - version constraints like '(>= 1.0)'
+  ##   - architecture qualifiers like '[linux-any]' / '[!linux-any]'
+  ##   - debhelper substitution markers (${shlibs:Depends} etc.)
+  ##   - '|' alternative-dep markers
+  ## NOTE: an 'A | B' alternative keeps BOTH names (not just the first). Reducing it to the
+  ## first alternative correctly needs a real Debian-dependency parser -- folding may occur
+  ## anywhere, alternatives carry per-arch and build-profile qualifiers, and grep-dctrl packs
+  ## multiple binary stanzas newline-separated -- so a bash reimplementation reliably regresses
+  ## one of those. Kept flat and simple on purpose (see the git skill's no-bash-parser rule).
+  temp="$(sed -e 's/,/ /g' -e 's/([^)]*)//g' -e 's/\[[^]]*\]//g')"
+  ## These are debhelper substitution markers, literal in debian/control.
+  # shellcheck disable=SC2016
+  for to_remove in '${shlibs:Depends}' '${misc:Depends}' '${python:Depends}' '${python3:Depends}' '|'; do
+    temp="${temp//"${to_remove}"/""}"
+  done
+  printf "%s\n" "${temp}"
 }
 
 ## Parse Build-Depends and Depends from debian/control. Split out from
