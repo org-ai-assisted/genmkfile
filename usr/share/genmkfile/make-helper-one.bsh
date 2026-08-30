@@ -1058,8 +1058,10 @@ make_debinstfile_create() {
         ## dir as root). A basename cannot contain '/', and the value is validated besides.
         pkg_name="${file_name##*/}"
         pkg_name="${pkg_name##*#}"
+        ## A leading dot is rejected too: a Debian package name cannot start with '.', and a
+        ## '.pkg.install' would be silently skipped by the later '*.install' glob (dotglob off).
         case "${pkg_name}" in
-          '' | *'/'* | '.' | '..')
+          '' | *'/'* | '.'*)
             die 1 "invalid package name '${pkg_name}' from multi-package filename '${file_name}' (expected '<path>#<pkgname>')"
             ;;
         esac
