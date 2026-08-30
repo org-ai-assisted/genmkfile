@@ -215,21 +215,28 @@ make_parse_cmd() {
 }
 
 make_dependencies_filter_helper() {
-  local temp to_remove
-  ## Read a Debian dependency expression on stdin, write a clean
-  ## space-separated package name list to stdout. Strips:
-  ##   - commas (separator)
-  ##   - version constraints like '(>= 1.0)'
-  ##   - architecture qualifiers like '[linux-any]' / '[!linux-any]'
-  ##   - debhelper substitution markers (${shlibs:Depends} etc.)
-  ##   - '|' alternative-dep markers
-  temp="$(sed -e 's/,/ /g' -e 's/([^)]*)//g' -e 's/\[[^]]*\]//g')"
-  ## These are debhelper substitution markers, literal in debian/control.
-  # shellcheck disable=SC2016
-  for to_remove in '${shlibs:Depends}' '${misc:Depends}' '${python:Depends}' '${python3:Depends}' '|'; do
-    temp="${temp//"${to_remove}"/""}"
+  ## Read a Debian dependency expression on stdin, write a clean space-separated package name
+  ## list to stdout. Each COMMA-separated field is one dependency; for an ALTERNATIVE group
+  ## ('A | B') keep ONLY the first alternative -- requiring every alternative is wrong, they
+  ## are often mutually exclusive (which is the whole point of an alternative). Drops version
+  ## constraints '(...)', architecture qualifiers '[...]', and debhelper substitution markers
+  ## '${...}' (e.g. ${shlibs:Depends}), which reduce to an empty, skipped field.
+  local raw field first_alt name
+  local -a fields=() names=()
+  raw="$(cat)"
+  ## Fold continuation lines (grep-dctrl preserves them) into one logical line before splitting.
+  raw="${raw//$'\n'/ }"
+  IFS=',' read -r -a fields <<<"${raw}"
+  for field in "${fields[@]}"; do
+    first_alt="${field%%|*}"
+    first_alt="$(printf '%s' "${first_alt}" \
+      | sed -e 's/([^)]*)//g' -e 's/\[[^]]*\]//g' -e 's/\${[^}]*}//g')"
+    ## The bare package name is the first whitespace-delimited token.
+    read -r name _ <<<"${first_alt}"
+    [ -n "${name}" ] || continue
+    names+=("${name}")
   done
-  printf "%s\n" "${temp}"
+  printf '%s\n' "${names[*]}"
 }
 
 ## Parse Build-Depends and Depends from debian/control. Split out from
@@ -477,16 +484,22 @@ make_get_variables() {
   ##   make_package_list           - source name + every binary package name
   ##   make_package_debs_files_list - the .deb path each binary will produce
   local package_name_architecture binary_package_architecture line skip_debs_artifact
+  local current_field continuation
   package=""
   binary_package_architecture=""
+  current_field=""
   all_package_debs_are_arch_all="true"
+  ## GENMKFILE-TEST-EXTRACT: stanza-parse-loop BEGIN (genmkfile-tests extracts this block to
+  ## drive it against a folded-field control; keep the sentinels so the test reads live code).
   while IFS= read -r line; do
     case "${line}" in
       "Package: "*)
         package="${line#Package: }"
+        current_field="package"
         ;;
       "Architecture: "*)
         binary_package_architecture="${line#Architecture: }"
+        current_field="architecture"
         ;;
       "")
         [ -n "${package}" ] || continue
@@ -541,9 +554,26 @@ make_get_variables() {
         fi
         package=""
         binary_package_architecture=""
+        current_field=""
+      ;;
+      [[:blank:]]*)
+        ## RFC822 folded continuation line (leading whitespace): append its value to the
+        ## field the preceding header line started. Without this a multi-line 'Architecture:'
+        ## silently loses every architecture after the first, so a covered target reads as
+        ## uncovered and its expected .deb is dropped from make_package_debs_files_list.
+        continuation="${line#"${line%%[![:blank:]]*}"}"
+        case "${current_field}" in
+          package)
+            package="${package} ${continuation}"
+            ;;
+          architecture)
+            binary_package_architecture="${binary_package_architecture} ${continuation}"
+            ;;
+        esac
       ;;
     esac
   done < <(grep-dctrl --show-field=Package,Architecture '' "${make_debian_control_file_absolute_path}")
+  ## GENMKFILE-TEST-EXTRACT: stanza-parse-loop END
 
   true "make_package_list: ${make_package_list[*]}"
   true "make_package_debs_files_list: ${make_package_debs_files_list[*]}"
