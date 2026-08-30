@@ -216,26 +216,39 @@ make_parse_cmd() {
 
 make_dependencies_filter_helper() {
   ## Read a Debian dependency expression on stdin, write a clean space-separated package name
-  ## list to stdout. Each COMMA-separated field is one dependency; for an ALTERNATIVE group
-  ## ('A | B') keep ONLY the first alternative -- requiring every alternative is wrong, they
-  ## are often mutually exclusive (which is the whole point of an alternative). Drops version
-  ## constraints '(...)', architecture qualifiers '[...]', and debhelper substitution markers
-  ## '${...}' (e.g. ${shlibs:Depends}), which reduce to an empty, skipped field.
-  local raw field first_alt name
-  local -a fields=() names=()
+  ## list to stdout. Drops version constraints '(...)', architecture qualifiers '[...]', and
+  ## debhelper substitution markers '${...}' (e.g. ${shlibs:Depends}).
+  local raw item alts name
+  local -a names=()
   raw="$(cat)"
-  ## Fold continuation lines (grep-dctrl preserves them) into one logical line before splitting.
-  raw="${raw//$'\n'/ }"
-  IFS=',' read -r -a fields <<<"${raw}"
-  for field in "${fields[@]}"; do
-    first_alt="${field%%|*}"
-    first_alt="$(printf '%s' "${first_alt}" \
+  ## Split into dependency ITEMS on BOTH commas AND newlines: grep-dctrl emits one paragraph
+  ## PER BINARY STANZA separated by NEWLINES with no comma, while within a stanza deps are
+  ## comma-separated (possibly folded across continuation lines). Folding newlines into the
+  ## comma stream would merge the last dep of one stanza with the first of the next and drop
+  ## packages. 'tr' turns each comma into a newline; existing newlines already split.
+  while IFS= read -r item; do
+    case "${item}" in
+      *'|'*'['*']'* | *'['*']'*'|'* )
+        ## ALTERNATIVE group carrying an architecture qualifier '[arch]': keep ALL alternatives.
+        ## Choosing by position could pick a wrong-arch package and break the build; apt/dpkg
+        ## install the one that applies.
+        alts="${item//|/ }"
+        ;;
+      *'|'* )
+        ## Plain alternative group ('A | B', often mutually exclusive): keep the FIRST only.
+        alts="${item%%|*}"
+        ;;
+      * )
+        alts="${item}"
+        ;;
+    esac
+    alts="$(printf '%s' "${alts}" \
       | sed -e 's/([^)]*)//g' -e 's/\[[^]]*\]//g' -e 's/\${[^}]*}//g')"
-    ## The bare package name is the first whitespace-delimited token.
-    read -r name _ <<<"${first_alt}"
-    [ -n "${name}" ] || continue
-    names+=("${name}")
-  done
+    # shellcheck disable=SC2086
+    for name in ${alts}; do
+      names+=("${name}")
+    done
+  done < <(printf '%s\n' "${raw}" | tr ',' '\n')
   printf '%s\n' "${names[*]}"
 }
 
@@ -503,6 +516,11 @@ make_get_variables() {
         ;;
       "")
         [ -n "${package}" ] || continue
+        ## Normalise the (possibly folded) architecture value: strip leading/trailing blanks so
+        ## a value that arrived only on a continuation line ('Architecture:\n all') still matches
+        ## the exact '= all' test below; interior blanks are fine (that test aside, the value is
+        ## word-split by make_architecture_covers_target).
+        read -r binary_package_architecture <<<"${binary_package_architecture}"
         true "package: ${package}"
         true "make_pkg_version: ${make_pkg_version}"
         true "make_pkg_revision: ${make_pkg_revision}"
