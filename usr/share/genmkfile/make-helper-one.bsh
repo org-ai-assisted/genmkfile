@@ -79,6 +79,16 @@ die() {
   local exit_code="$1"
   shift
   make_output_error "${@}"
+  ## A fatal error must never report SUCCESS: a non-numeric code, 0, or a value outside
+  ## 1..255 (which 'exit' would wrap mod 256, so 256 -> 0) falls back to 1.
+  case "${exit_code}" in
+    '' | *[!0-9]* )
+      exit_code=1
+      ;;
+  esac
+  if [ "${exit_code}" -lt 1 ] || [ "${exit_code}" -gt 255 ]; then
+    exit_code=1
+  fi
   exit "${exit_code}"
 }
 
