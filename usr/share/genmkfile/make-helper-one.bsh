@@ -645,7 +645,13 @@ make_get_distdir() {
     DISTDIR=".."
   fi
 
-  if [ "${make_use_cowbuilder:-}" = "true" ]; then
+  ## The cowbuilder dist folder only matters for a target that actually BUILDS
+  ## or places dist artifacts. A non-dist action (git-*, help, deb-*-dep) sets
+  ## make_enforce_cowbuilder_distdir=false so it is not forced to configure
+  ## cowbuilder output it never writes -- DISTDIR just keeps its "../" default.
+  ## Default true, so any other caller keeps the strict behaviour.
+  if [ "${make_enforce_cowbuilder_distdir:-true}" = "true" ] \
+     && [ "${make_use_cowbuilder:-}" = "true" ]; then
     if [ -z "${make_cowbuilder_dist_folder:-}" ]; then
       die 1 "make_use_cowbuilder=${make_use_cowbuilder}, so environment variable make_cowbuilder_dist_folder needs to be set! For example:
 make_use_cowbuilder=${make_use_cowbuilder} make_cowbuilder_dist_folder=~/genmkfile-packages-result"
@@ -2815,25 +2821,33 @@ if was_executed "${BASH_SOURCE[0]}"; then
   make_function_run make_source_overrides_file "$@"
   make_function_run make_source_overrides_folder "$@"
 
-  ## Decide what heavy setup the requested target(s) need BEFORE running any.
-  ## git-push is a PURE git operation: no DISTDIR/DESTDIR (which, under
-  ## make_use_cowbuilder=true, DEMAND make_cowbuilder_dist_folder and abort
-  ## without it), no debian/control, no dpkg-parsechangelog. Gating all of these
-  ## lets it run in ANY repo -- and inside a cowbuilder build shell -- without
-  ## tripping on package config it never uses.
-  ## deb-{build,run,all}-dep only need Build-Depends / Depends parsed from
-  ## debian/control; every other build target additionally needs
-  ## dpkg-parsechangelog (dpkg-dev), which may be absent on a fresh system, so
-  ## parse the changelog only when a target actually needs it.
+  ## Classify the requested target(s) so a NON-COWBUILDER action never trips on
+  ## cowbuilder config it does not use:
+  ##  - __needs_distdir      run make_get_distdir/destdir (set DISTDIR/DESTDIR).
+  ##  - __enforce_cowbuilder additionally REQUIRE + redirect to the cowbuilder
+  ##                         dist folder -- only a real build/dist target does.
+  ##  - __needs_version_info parse debian/control + dpkg-parsechangelog
+  ##                         (make_source_package_name, versions, ...); dpkg-dev
+  ##                         may be absent on a fresh system.
+  ##  - __needs_dependencies parse Build-Depends / Depends only.
+  ## git-push is fully standalone; help/test are query/dummy -> none of these.
+  ## The git-tag-* / git-verify family needs make_source_package_name
+  ## (make_get_variables) but never builds with cowbuilder, so it sets DISTDIR at
+  ## its default WITHOUT the cowbuilder-folder requirement. deb-*-dep only
+  ## resolves dependencies. Everything else keeps the conservative default:
+  ## DISTDIR set AND cowbuilder enforced.
   __needs_distdir=false
+  __enforce_cowbuilder=false
   __needs_version_info=false
   __needs_dependencies=false
   for __arg in "$@"; do
     case "${__arg}" in
-    git-push)
+    git-push | help | test)
       ;;
-    "" | help | --)
+    git-tag-push | git-tag-show | git-tag-show-latest | git-tag-sign \
+      | git-tag-verify | git-tag-check | git-commit-verify | git-verify)
       __needs_distdir=true
+      __needs_version_info=true
       ;;
     deb-build-dep | deb-run-dep | deb-all-dep)
       __needs_distdir=true
@@ -2841,15 +2855,17 @@ if was_executed "${BASH_SOURCE[0]}"; then
       ;;
     *)
       __needs_distdir=true
+      __enforce_cowbuilder=true
       __needs_version_info=true
       ;;
     esac
   done
   ## No arguments falls through to make_all in make_parse_cmd; treat it
   ## like any other build target.
-  [ $# -eq 0 ] && { __needs_distdir=true; __needs_version_info=true; }
+  [ $# -eq 0 ] && { __needs_distdir=true; __enforce_cowbuilder=true; __needs_version_info=true; }
 
   if [ "${__needs_distdir}" = "true" ]; then
+    make_enforce_cowbuilder_distdir="${__enforce_cowbuilder}"
     make_function_run make_get_distdir
     make_function_run make_get_destdir
   fi
@@ -2859,7 +2875,8 @@ if was_executed "${BASH_SOURCE[0]}"; then
   elif [ "${__needs_dependencies}" = "true" ]; then
     make_function_run make_get_dependencies
   fi
-  unset __arg __needs_distdir __needs_version_info __needs_dependencies
+  unset __arg __needs_distdir __enforce_cowbuilder __needs_version_info \
+    __needs_dependencies make_enforce_cowbuilder_distdir
 
   make_function_run make_parse_cmd "$@"
   make_function_run make_deinit
