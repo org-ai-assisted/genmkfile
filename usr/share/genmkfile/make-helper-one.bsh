@@ -218,8 +218,12 @@ make_parse_cmd() {
     exit_with_error 1 "unrecognized target '$1' (every argument must be a genmkfile target; run 'genmkfile help')"
   fi
 
+  ## An unrecognized FIRST argument reached here (no valid target ran). Do NOT
+  ## fall through to running it -- make_function_run would exec it as a command,
+  ## so a mistyped target that happens to name a PATH binary ('genmkfile rm ...',
+  ## 'genmkfile id') would EXECUTE it. Fail loud, same as the 2nd-arg case above.
   if ! [ "${matched}" = "true" ]; then
-    make_function_run "$@"
+    exit_with_error 1 "unrecognized target '$1' (every argument must be a genmkfile target; run 'genmkfile help')"
   fi
 }
 
@@ -1063,6 +1067,7 @@ make_debinstfile() {
 make_debinstfile_create() {
   local new_file filename_without_dot filename_without_hash \
     cleaned_filename_without_hash pkg_name \
+    filename_hash_dir filename_hash_base \
     temp_deb_install_file real_deb_install_file
   local -a find_cmd
   local -A delete_yet
@@ -1076,15 +1081,27 @@ make_debinstfile_create() {
   find_cmd+=(-not -name '.gitignore')
   find_cmd+=(-not -path './debian*')
   find_cmd+=(-iname '*#*')
+  ## Files/symlinks only: a '#'-named DIRECTORY must not be emitted as an install
+  ## entry (the '#' is the package delimiter, so such a dir is never a real target).
+  find_cmd+=('(' -type f -o -type l ')')
 
   if "${find_cmd[@]}" | grep --fixed-strings -- '#' >/dev/null; then
     true "multi-package hash filename found: yes"
     find_cmd+=(-print0)
 
-    "${find_cmd[@]}" | LC_ALL='C' sort -z |
-      while IFS= read -r -d '' file_name; do
+    ## Process substitution, NOT 'find | while': the loop body runs in THIS shell, so
+    ## exit_with_error on an invalid package name aborts the whole run. Piped, the loop is
+    ## a subshell and the die would only exit IT -- silently skipping that file and every
+    ## file sorted after it (partial, wrong .install) while the build reports success.
+    while IFS= read -r -d '' file_name; do
         filename_without_dot="${file_name#./}"
-        filename_without_hash="${file_name%%#*}"
+        ## Strip the '#<pkgname>' delimiter from the BASENAME only -- same basis as
+        ## pkg_name below (after the basename's LAST '#'). Deriving the dest from the
+        ## whole path ('${file_name%%#*}') truncated it at a '#' in a PARENT directory:
+        ## 'us#r/bin/foo#pkg' yielded dest '/us' instead of '/us#r/bin/foo'.
+        filename_hash_dir="${file_name%/*}"
+        filename_hash_base="${file_name##*/}"
+        filename_without_hash="${filename_hash_dir}/${filename_hash_base%#*}"
         cleaned_filename_without_hash="${filename_without_hash/#.\//\/}"
         ## The package name is the BASENAME's part after its last '#'. Deriving it from the
         ## whole path ('${file_name#*#}') let a PARENT directory containing '#..' inject '../'
@@ -1117,7 +1134,7 @@ make_debinstfile_create() {
         fi
 
         printf "%s\n" "${filename_without_dot} => ${cleaned_filename_without_hash}" | sponge -a -- "${temp_deb_install_file}"
-      done
+    done < <("${find_cmd[@]}" | LC_ALL='C' sort -z)
 
     for new_file in "${genmkfile_temp_dir}"/*.install; do
       real_deb_install_file="debian/${new_file##*/}"
@@ -2558,7 +2575,9 @@ make_git_tag_push() {
   make_require append-once
 
   if [ -n "${make_git_push_branches:-}" ]; then
-    read -r -a branches <<< "${make_git_push_branches}"
+    ## Fold newlines to spaces first: read -a on a here-string stops at the first
+    ## newline, so a newline-separated value silently drops all but line 1.
+    read -r -a branches <<< "${make_git_push_branches//$'\n'/ }"
     [ "${#branches[@]}" -gt 0 ] \
       || exit_with_error 1 "make_git_push_branches is set but parses to an empty list (whitespace-only?)."
     for branch in "${branches[@]}"; do
@@ -2572,7 +2591,9 @@ make_git_tag_push() {
     branches=( "${current_branch}" )
   fi
 
-  read -r -a remotes <<< "${make_git_push_remotes}"
+  ## Fold newlines to spaces first (e.g. make_git_push_remotes="$(git remote)"):
+  ## read -a on a here-string stops at the first newline, silently dropping the rest.
+  read -r -a remotes <<< "${make_git_push_remotes//$'\n'/ }"
   [ "${#remotes[@]}" -gt 0 ] \
     || exit_with_error 1 "make_git_push_remotes is set but parses to an empty list (whitespace-only?)."
   for remote in "${remotes[@]}"; do
@@ -2626,7 +2647,9 @@ make_git_push() {
   [ -n "${make_git_push_remotes:-}" ] || make_git_push_remotes="origin"
 
   if [ -n "${make_git_push_branches:-}" ]; then
-    read -r -a branches <<< "${make_git_push_branches}"
+    ## Fold newlines to spaces first: read -a on a here-string stops at the first
+    ## newline, so a newline-separated value silently drops all but line 1.
+    read -r -a branches <<< "${make_git_push_branches//$'\n'/ }"
     [ "${#branches[@]}" -gt 0 ] \
       || exit_with_error 1 "make_git_push_branches is set but parses to an empty list (whitespace-only?)."
     for branch in "${branches[@]}"; do
@@ -2640,7 +2663,9 @@ make_git_push() {
     branches=( "${current_branch}" )
   fi
 
-  read -r -a remotes <<< "${make_git_push_remotes}"
+  ## Fold newlines to spaces first (e.g. make_git_push_remotes="$(git remote)"):
+  ## read -a on a here-string stops at the first newline, silently dropping the rest.
+  read -r -a remotes <<< "${make_git_push_remotes//$'\n'/ }"
   [ "${#remotes[@]}" -gt 0 ] \
     || exit_with_error 1 "make_git_push_remotes is set but parses to an empty list (whitespace-only?)."
   for remote in "${remotes[@]}"; do
