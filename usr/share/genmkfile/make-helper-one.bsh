@@ -355,155 +355,19 @@ make_parse_changelog_version() {
   fi
 }
 
-make_get_variables() {
-  ## Initialize the array if the caller did not set it (nounset-safe).
-  [ -n "${make_folder_list_for_un_and_install+x}" ] || make_folder_list_for_un_and_install=()
-  if [ "${#make_folder_list_for_un_and_install[@]}" -eq 0 ]; then
-    make_folder_list_for_un_and_install=(bin boot dev etc home lib opt sbin srv sys usr var)
-  fi
-
-  local my_user_id
-  my_user_id="$(id -u)"
-  if [ "${my_user_id}" = "0" ]; then
-    running_as_root_maybe="Running under account '${under}root${eunder}'. (uid '${my_user_id}')"
-  else
-    running_as_root_maybe="Running under account '${under}user${eunder}'. (uid '${my_user_id}')"
-  fi
-
-  ## Deterministic.
-  LC_ALL=C.UTF-8
-  TZ=UTC
-  export LC_ALL TZ
-
-  ## XXX: maybe better set dynamically but would that be deterministic?
-  [ -n "${XZ_OPT:-}" ] || XZ_OPT="--threads=8"
-  export XZ_OPT
-
-  ## Skip dpkg-parsechangelog.
-  ## make_get_dependencies short-circuits on empty
-  ## make_debian_control_file_absolute_path.
-  if [ "${make_use_git_describe_for_version:-}" = "true" ]; then
-    ## make_get_dependencies runs make_shared_function, which sets
-    ## make_debian_control_file_absolute_path (empty when there is no
-    ## debian/control). The control-present check below branches on it.
-    make_function_run make_get_dependencies
-
-    ## Derive the git tag version from the nearest signed git tag (created
-    ## as commit_<sha> by make_git_tag_sign) rather than from
-    ## debian/changelog, so `genmkfile git-verify` / `git-tag` work for
-    ## repos that tag by commit. This is independent of any deb version
-    ## and is preserved even when the repo is also built as a .deb (see
-    ## the control-present fall-through below).
-    if ! make_git_tag_version_number="$(git describe --abbrev=0 2>/dev/null)"; then
-      exit_with_error 1 "make_use_git_describe_for_version=true but no git tag reachable from HEAD; sign one with dm-quickgittagsign first."
-    fi
-    [ -n "${make_git_tag_version_number}" ] \
-      || exit_with_error 1 "make_use_git_describe_for_version=true but 'git describe --abbrev=0' returned empty."
-    make_git_tag_version_number="${make_git_tag_version_number}${make_git_tag_sign_appendix:-}"
-    true "make_git_tag_version_number (from git describe): ${make_git_tag_version_number}"
-
-    ## A repo with no debian/control has no deb to build. Blank the deb
-    ## details variables and short-circuit. This is the original special-repo
-    ## path (Whonix-Installer, Whonix-Starter,
-    ## qubes-template-{kicksecure,whonix}, ...).
-    if [ -z "${make_debian_control_file_absolute_path:-}" ]; then
-      make_changelog_version=""
-      make_pkg_revision=""
-      make_pkg_version=""
-      make_epoch=""
-      make_pkg_version_with_revision=""
-
-      ## Downstream make_git_tag_shared reads make_source_package_name
-      ## under `set -o nounset` (just to check whether it equals
-      ## "derivative-maker"). The regular branch sets it from
-      ## `dpkg-parsechangelog --show-field Source`; for special repos
-      ## there's no changelog, so use the repo's directory basename
-      ## ("qubes-template-kicksecure", "Whonix-Installer", ...).
-      make_source_package_name="$(basename -- "${PWD}")"
-      make_package_list=("${make_source_package_name}")
-      return 0
-    fi
-
-    ## Otherwise this repo opted into git-describe versioning but DOES
-    ## ship debian/control (e.g. live-build) and is still built as a .deb
-    ## via genmkfile. Fall through to the normal path below so the
-    ## changelog version and the tarball / .dsc variables get set; the
-    ## git-describe tag version computed above is kept (the changelog
-    ## version assignment below is skipped while this flag is set).
-  fi
-
-  local temp
-  if ! has dpkg-parsechangelog; then
-    exit_with_error 1 "dpkg-parsechangelog not found (provided by 'dpkg-dev'). Run: sudo genmkfile deb-build-dep"
-  fi
-
-  make_function_run make_get_dependencies
-
-  make_debian_changelog_file_relative_path="debian/changelog"
-  make_debian_changelog_file_absolute_path="$(realpath -- "${make_debian_changelog_file_relative_path}")"
-  test -f "${make_debian_changelog_file_absolute_path}"
-
-  ## Example make_changelog_version values:
-  ##   3:0.1-1
-  ##   0.1-1
-  ##   1:20240810
-  make_changelog_version="$(dpkg-parsechangelog --show-field Version)"
-
-  make_parse_changelog_version "${make_changelog_version}"
-
-  true "make_changelog_version: ${make_changelog_version}"
-  true "make_pkg_revision: ${make_pkg_revision}"
-  true "make_pkg_version: ${make_pkg_version}"
-  true "make_epoch: ${make_epoch}"
-
-  if [ -z "${make_pkg_version}" ]; then
-    exit_with_error 1 "variable make_pkg_version is empty."
-  fi
-
-  make_pkg_version_with_revision="${make_pkg_version}${make_pkg_revision}"
-
-  if [ "${make_use_git_describe_for_version:-}" = "true" ]; then
-    ## Tag version already derived from git describe above (with the
-    ## appendix applied there). Keep it; do not override with the
-    ## changelog version. The tag scheme for these repos is commit_<sha>,
-    ## so git-verify must compare against that, not the changelog version.
-    true "make_git_tag_version_number (git describe, kept): ${make_git_tag_version_number}"
-  else
-    if [ "${make_pkg_use_pkg_version_without_revision_for_git_version:-}" = "true" ]; then
-      ## used for derivative-maker
-      make_git_tag_version_number="${make_pkg_version}"
-    else
-      ## default for all packages
-      make_git_tag_version_number="${make_pkg_version_with_revision}"
-    fi
-    ## make_git_tag_sign_appendix gets set by dm-bump-derivative-maker-version
-    make_git_tag_version_number="${make_git_tag_version_number}${make_git_tag_sign_appendix:-}"
-  fi
-
-  [ -n "${host_architecture:-}" ] || host_architecture="${dpkg_print_architecture}"
-  [ -n "${target_architecture:-}" ] || target_architecture="${dpkg_print_architecture}"
-
-  local package
-  make_source_package_name="$(dpkg-parsechangelog --show-field Source)"
-  ## Source package name may or may not match binary package name.
-  make_package_list=("${make_source_package_name}")
-  make_package_debs_files_list=()
-
-  make_debian_non_package_specific_install_file_relative_path="debian/install"
-  make_debian_install_file_relative_path="debian/${make_source_package_name}.install"
-
-  ## Walk every binary-package stanza in debian/control via grep-dctrl
-  ## and build:
-  ##   make_package_list           - source name + every binary package name
-  ##   make_package_debs_files_list - the .deb path each binary will produce
-  local package_name_architecture binary_package_architecture line skip_debs_artifact
-  local current_field continuation
+## Walk every binary-package stanza in debian/control via grep-dctrl and, for the current
+## target architecture, append to the globals make_package_list (source name + every binary
+## package name) and make_package_debs_files_list (the .deb path each binary produces),
+## clearing all_package_debs_are_arch_all when any stanza builds architecture-dependent.
+## Reads make_source_package_name / make_pkg_version / make_pkg_revision / target_architecture /
+## DISTDIR / make_debian_control_file_absolute_path from the caller. A standalone function --
+## not an inline block -- so genmkfile-tests can source and drive it directly.
+make_get_variables_parse_stanzas() {
+  local package binary_package_architecture current_field line skip_debs_artifact
+  local package_name_architecture continuation temp
   package=""
   binary_package_architecture=""
   current_field=""
-  all_package_debs_are_arch_all="true"
-  ## GENMKFILE-TEST-EXTRACT: stanza-parse-loop BEGIN (genmkfile-tests extracts this block to
-  ## drive it against a folded-field control; keep the sentinels so the test reads live code).
   while IFS= read -r line; do
     case "${line}" in
       "Package: "*)
@@ -594,7 +458,148 @@ make_get_variables() {
       ;;
     esac
   done < <(grep-dctrl --show-field=Package,Architecture '' "${make_debian_control_file_absolute_path}")
-  ## GENMKFILE-TEST-EXTRACT: stanza-parse-loop END
+}
+
+make_get_variables() {
+  ## Initialize the array if the caller did not set it (nounset-safe).
+  [ -n "${make_folder_list_for_un_and_install+x}" ] || make_folder_list_for_un_and_install=()
+  if [ "${#make_folder_list_for_un_and_install[@]}" -eq 0 ]; then
+    make_folder_list_for_un_and_install=(bin boot dev etc home lib opt sbin srv sys usr var)
+  fi
+
+  local my_user_id
+  my_user_id="$(id -u)"
+  if [ "${my_user_id}" = "0" ]; then
+    running_as_root_maybe="Running under account '${under}root${eunder}'. (uid '${my_user_id}')"
+  else
+    running_as_root_maybe="Running under account '${under}user${eunder}'. (uid '${my_user_id}')"
+  fi
+
+  ## Deterministic.
+  LC_ALL=C.UTF-8
+  TZ=UTC
+  export LC_ALL TZ
+
+  ## XXX: maybe better set dynamically but would that be deterministic?
+  [ -n "${XZ_OPT:-}" ] || XZ_OPT="--threads=8"
+  export XZ_OPT
+
+  ## Skip dpkg-parsechangelog.
+  ## make_get_dependencies short-circuits on empty
+  ## make_debian_control_file_absolute_path.
+  if [ "${make_use_git_describe_for_version:-}" = "true" ]; then
+    ## make_get_dependencies runs make_shared_function, which sets
+    ## make_debian_control_file_absolute_path (empty when there is no
+    ## debian/control). The control-present check below branches on it.
+    make_function_run make_get_dependencies
+
+    ## Derive the git tag version from the nearest signed git tag (created
+    ## as commit_<sha> by make_git_tag_sign) rather than from
+    ## debian/changelog, so `genmkfile git-verify` / `git-tag` work for
+    ## repos that tag by commit. This is independent of any deb version
+    ## and is preserved even when the repo is also built as a .deb (see
+    ## the control-present fall-through below).
+    if ! make_git_tag_version_number="$(git describe --abbrev=0 2>/dev/null)"; then
+      exit_with_error 1 "make_use_git_describe_for_version=true but no git tag reachable from HEAD; sign one with dm-quickgittagsign first."
+    fi
+    [ -n "${make_git_tag_version_number}" ] \
+      || exit_with_error 1 "make_use_git_describe_for_version=true but 'git describe --abbrev=0' returned empty."
+    make_git_tag_version_number="${make_git_tag_version_number}${make_git_tag_sign_appendix:-}"
+    true "make_git_tag_version_number (from git describe): ${make_git_tag_version_number}"
+
+    ## A repo with no debian/control has no deb to build. Blank the deb
+    ## details variables and short-circuit. This is the original special-repo
+    ## path (Whonix-Installer, Whonix-Starter,
+    ## qubes-template-{kicksecure,whonix}, ...).
+    if [ -z "${make_debian_control_file_absolute_path:-}" ]; then
+      make_changelog_version=""
+      make_pkg_revision=""
+      make_pkg_version=""
+      make_epoch=""
+      make_pkg_version_with_revision=""
+
+      ## Downstream make_git_tag_shared reads make_source_package_name
+      ## under `set -o nounset` (just to check whether it equals
+      ## "derivative-maker"). The regular branch sets it from
+      ## `dpkg-parsechangelog --show-field Source`; for special repos
+      ## there's no changelog, so use the repo's directory basename
+      ## ("qubes-template-kicksecure", "Whonix-Installer", ...).
+      make_source_package_name="$(basename -- "${PWD}")"
+      make_package_list=("${make_source_package_name}")
+      return 0
+    fi
+
+    ## Otherwise this repo opted into git-describe versioning but DOES
+    ## ship debian/control (e.g. live-build) and is still built as a .deb
+    ## via genmkfile. Fall through to the normal path below so the
+    ## changelog version and the tarball / .dsc variables get set; the
+    ## git-describe tag version computed above is kept (the changelog
+    ## version assignment below is skipped while this flag is set).
+  fi
+
+  if ! has dpkg-parsechangelog; then
+    exit_with_error 1 "dpkg-parsechangelog not found (provided by 'dpkg-dev'). Run: sudo genmkfile deb-build-dep"
+  fi
+
+  make_function_run make_get_dependencies
+
+  make_debian_changelog_file_relative_path="debian/changelog"
+  make_debian_changelog_file_absolute_path="$(realpath -- "${make_debian_changelog_file_relative_path}")"
+  test -f "${make_debian_changelog_file_absolute_path}"
+
+  ## Example make_changelog_version values:
+  ##   3:0.1-1
+  ##   0.1-1
+  ##   1:20240810
+  make_changelog_version="$(dpkg-parsechangelog --show-field Version)"
+
+  make_parse_changelog_version "${make_changelog_version}"
+
+  true "make_changelog_version: ${make_changelog_version}"
+  true "make_pkg_revision: ${make_pkg_revision}"
+  true "make_pkg_version: ${make_pkg_version}"
+  true "make_epoch: ${make_epoch}"
+
+  if [ -z "${make_pkg_version}" ]; then
+    exit_with_error 1 "variable make_pkg_version is empty."
+  fi
+
+  make_pkg_version_with_revision="${make_pkg_version}${make_pkg_revision}"
+
+  if [ "${make_use_git_describe_for_version:-}" = "true" ]; then
+    ## Tag version already derived from git describe above (with the
+    ## appendix applied there). Keep it; do not override with the
+    ## changelog version. The tag scheme for these repos is commit_<sha>,
+    ## so git-verify must compare against that, not the changelog version.
+    true "make_git_tag_version_number (git describe, kept): ${make_git_tag_version_number}"
+  else
+    if [ "${make_pkg_use_pkg_version_without_revision_for_git_version:-}" = "true" ]; then
+      ## used for derivative-maker
+      make_git_tag_version_number="${make_pkg_version}"
+    else
+      ## default for all packages
+      make_git_tag_version_number="${make_pkg_version_with_revision}"
+    fi
+    ## make_git_tag_sign_appendix gets set by dm-bump-derivative-maker-version
+    make_git_tag_version_number="${make_git_tag_version_number}${make_git_tag_sign_appendix:-}"
+  fi
+
+  [ -n "${host_architecture:-}" ] || host_architecture="${dpkg_print_architecture}"
+  [ -n "${target_architecture:-}" ] || target_architecture="${dpkg_print_architecture}"
+
+  make_source_package_name="$(dpkg-parsechangelog --show-field Source)"
+  ## Source package name may or may not match binary package name.
+  make_package_list=("${make_source_package_name}")
+  make_package_debs_files_list=()
+
+  make_debian_non_package_specific_install_file_relative_path="debian/install"
+  make_debian_install_file_relative_path="debian/${make_source_package_name}.install"
+
+  ## Parse every binary-package stanza in debian/control (Package/Architecture, RFC822
+  ## folding) into make_package_list + make_package_debs_files_list. A standalone function
+  ## so the parser can be sourced and driven directly by genmkfile-tests.
+  all_package_debs_are_arch_all="true"
+  make_get_variables_parse_stanzas
 
   true "make_package_list: ${make_package_list[*]}"
   true "make_package_debs_files_list: ${make_package_debs_files_list[*]}"
