@@ -2815,43 +2815,51 @@ if was_executed "${BASH_SOURCE[0]}"; then
   make_function_run make_source_overrides_file "$@"
   make_function_run make_source_overrides_folder "$@"
 
-  make_function_run make_get_distdir
-  make_function_run make_get_destdir
-
-  ## deb-{build,run,all}-dep only need Build-Depends / Depends parsed
-  ## from debian/control. Every other target additionally needs
-  ## dpkg-parsechangelog (from dpkg-dev, pulled in by build-essential)
-  ## which may be absent on a fresh system -- the user would run
-  ## 'genmkfile deb-build-dep' to install it. So call the full setup
-  ## only when a target actually needs it.
+  ## Decide what heavy setup the requested target(s) need BEFORE running any.
+  ## git-push is a PURE git operation: no DISTDIR/DESTDIR (which, under
+  ## make_use_cowbuilder=true, DEMAND make_cowbuilder_dist_folder and abort
+  ## without it), no debian/control, no dpkg-parsechangelog. Gating all of these
+  ## lets it run in ANY repo -- and inside a cowbuilder build shell -- without
+  ## tripping on package config it never uses.
+  ## deb-{build,run,all}-dep only need Build-Depends / Depends parsed from
+  ## debian/control; every other build target additionally needs
+  ## dpkg-parsechangelog (dpkg-dev), which may be absent on a fresh system, so
+  ## parse the changelog only when a target actually needs it.
+  __needs_distdir=false
   __needs_version_info=false
   __needs_dependencies=false
   for __arg in "$@"; do
     case "${__arg}" in
-    "" | help | --)
-      ;;
     git-push)
-      ## Pure git operation: no debian/control or dpkg-parsechangelog,
-      ## so it runs in ANY repo, not only a debian package tree.
+      ;;
+    "" | help | --)
+      __needs_distdir=true
       ;;
     deb-build-dep | deb-run-dep | deb-all-dep)
+      __needs_distdir=true
       __needs_dependencies=true
       ;;
     *)
+      __needs_distdir=true
       __needs_version_info=true
       ;;
     esac
   done
   ## No arguments falls through to make_all in make_parse_cmd; treat it
   ## like any other build target.
-  [ $# -eq 0 ] && __needs_version_info=true
+  [ $# -eq 0 ] && { __needs_distdir=true; __needs_version_info=true; }
+
+  if [ "${__needs_distdir}" = "true" ]; then
+    make_function_run make_get_distdir
+    make_function_run make_get_destdir
+  fi
 
   if [ "${__needs_version_info}" = "true" ]; then
     make_function_run make_get_variables
   elif [ "${__needs_dependencies}" = "true" ]; then
     make_function_run make_get_dependencies
   fi
-  unset __arg __needs_version_info __needs_dependencies
+  unset __arg __needs_distdir __needs_version_info __needs_dependencies
 
   make_function_run make_parse_cmd "$@"
   make_function_run make_deinit
