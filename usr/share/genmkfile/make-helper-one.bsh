@@ -65,6 +65,7 @@ make_log_and_run() {
 
 make_output_error() {
   local trace
+  # shellcheck source=../../../../helper-scripts/usr/libexec/helper-scripts/trace.bsh
   source "${HELPER_SCRIPTS_PATH:-}/usr/libexec/helper-scripts/trace.bsh" || true
   ## override in case 'function_trace' unavailable.
   trace="$(function_trace)" || true
@@ -1284,6 +1285,7 @@ make_deb_pkg_build_shared() {
   ## only when EVERY built binary is arch-all, so skip exactly that case on a
   ## non-first architecture. Skipping when the flag is 'false' would instead
   ## drop the architecture-dependent .deb for every secondary architecture.
+  # shellcheck disable=SC2154  # first_arch is exported by the make-helper.bsh entrypoint
   if [ "${all_package_debs_are_arch_all}" = 'true' ] \
     && ! [ "${target_architecture}" = "${first_arch}" ]; then
     make_output_info "Skipping build because all binaries built by this package are arch-all and they have already been built."
@@ -2543,6 +2545,7 @@ make_git_tag_push() {
   local -a branches remotes all_tags unique_tags
   local -A push_label=()
 
+  # shellcheck source=../../../../helper-scripts/usr/libexec/helper-scripts/parallel.bsh
   source "${HELPER_SCRIPTS_PATH:-}/usr/libexec/helper-scripts/parallel.bsh"
 
   make_function_run make_git_tag_shared
@@ -2587,9 +2590,11 @@ make_git_tag_push() {
 
   for remote in "${remotes[@]}"; do
     git_push_to_remote "${remote}" "${branches[@]}" -- "${unique_tags[@]}" &
+    # shellcheck disable=SC2034  # read by parallel_wait via nameref (shellcheck cannot see the source)
     push_label[$!]="${remote}"
   done
 
+  # shellcheck disable=SC2154  # parallel_failures is set by parallel_wait (parallel.bsh)
   if ! parallel_wait push_label; then
     die 1 "atomic push failed: branches=[${branches[*]}] tags=[${unique_tags[*]}] remote(s)=[${parallel_failures[*]}]"
   fi
@@ -2607,6 +2612,7 @@ make_git_push() {
   local -a branches remotes
   local -A push_label=()
 
+  # shellcheck source=../../../../helper-scripts/usr/libexec/helper-scripts/parallel.bsh
   source "${HELPER_SCRIPTS_PATH:-}/usr/libexec/helper-scripts/parallel.bsh"
 
   make_require git
@@ -2638,6 +2644,7 @@ make_git_push() {
 
   for remote in "${remotes[@]}"; do
     git_push_to_remote "${remote}" "${branches[@]}" &
+    # shellcheck disable=SC2034  # read by parallel_wait via nameref (shellcheck cannot see the source)
     push_label[$!]="${remote}"
   done
 
@@ -2728,12 +2735,17 @@ make_reprepro_remove() {
 }
 
 make_source_overrides_file() {
+  ## style-ok: allow-sc1091-disable -- the make-helper-overrides.bsh files below
+  ## are OPTIONAL per-project hooks that are legitimately absent in an isolated
+  ## checkout, so shellcheck cannot follow them.
   if test -x "./make-helper-overrides.bsh"; then
     bash -n "./make-helper-overrides.bsh"
+    # shellcheck disable=SC1091  # optional per-project override, absent in an isolated checkout
     source "./make-helper-overrides.bsh"
   fi
   if test -x "./debian/make-helper-overrides.bsh"; then
     bash -n "./debian/make-helper-overrides.bsh"
+    # shellcheck disable=SC1091  # optional per-project override, absent in an isolated checkout
     source "./debian/make-helper-overrides.bsh"
   fi
 }
@@ -2788,6 +2800,7 @@ if was_executed "${BASH_SOURCE[0]}"; then
     ## pre.bsh would `source` the following folders:
     ## /etc/make-helper-one.bsh_pre.d/*.conf
     ## /usr/local/etc/make-helper-one.bsh_pre.d/*.conf
+    # shellcheck source=../../../../helper-scripts/usr/libexec/helper-scripts/pre.bsh
     source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/pre.bsh
   fi
 

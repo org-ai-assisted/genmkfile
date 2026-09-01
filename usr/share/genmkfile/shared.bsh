@@ -24,10 +24,13 @@ make_shared_function() {
    ## make_use_git_describe_for_version flow through this preamble
    ## unaffected.
    make_debian_control_file_relative_path="debian/control"
+   ## make_debian_control_file_absolute_path is consumed by make-helper-one.bsh.
+   # shellcheck disable=SC2034
    if [ -f "${make_debian_control_file_relative_path}" ]; then
       make_debian_control_file_absolute_path="$(realpath -- "${make_debian_control_file_relative_path}")"
    else
       make_debian_control_file_relative_path=""
+      # shellcheck disable=SC2034
       make_debian_control_file_absolute_path=""
    fi
 
