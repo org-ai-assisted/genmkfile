@@ -832,6 +832,20 @@ genmkfile git-tag-push
    make_git_push_remotes to refs that exist locally; genmkfile errors
    out on a missing branch or remote.
 
+genmkfile git-push
+   Atomic push of branches (NO tags) to each listed remote, in
+   parallel. Unsigned: unlike git-tag-push it requires no tag at the
+   branch tip, so it is the path for dev/backup pushes. A remote whose
+   tracking ref already equals the local tip is skipped (no git push),
+   so re-running does not hammer up-to-date remotes.
+   Default: current branch -> 'origin'.
+   Environment variables:
+     make_git_push_branches       space-separated branch list (unset -> current branch)
+     make_git_push_remotes        space-separated remote list (unset -> origin)
+   The caller is responsible for filtering make_git_push_branches /
+   make_git_push_remotes to refs that exist locally; genmkfile errors
+   out on a missing branch or remote.
+
 genmkfile git-tag-show-latest
    Echo the most recent git tag to stdout.
 
@@ -2450,12 +2464,13 @@ git_tag_push_cache_write() {
   append-once "${cache_file}" "${remote_url}:${tag}:${sha}"
 }
 
-## Backgrounded by make_git_tag_push (one per remote): 'die' kills
-## only the sub-shell; parent's 'wait' aggregates per-remote
-## failures. Args: <remote> <branch>... -- <tag>...
-##
-## FIXME: This function's name is wrong, it pushes branches as well as tags.
-git_tag_push_to_remote() {
+## Backgrounded (one per remote) by make_git_tag_push (branches + tags)
+## and make_git_push (branches only): 'die' kills only the sub-shell;
+## parent's 'wait' aggregates per-remote failures. Args:
+## <remote> <branch>... [-- <tag>...]. With no '--'/tags it pushes only
+## the given branches. A branch already at the remote tip (per its
+## tracking ref) is skipped, so an up-to-date remote is never hammered.
+git_push_to_remote() {
   local remote branch tag tag_sha local_sha tracking_ref arg sep_seen
   local -a branches tags tags_to_push refspecs
 
@@ -2565,7 +2580,7 @@ make_git_tag_push() {
   mapfile -t unique_tags <<< "${unique_tags_raw}"
 
   for remote in "${remotes[@]}"; do
-    git_tag_push_to_remote "${remote}" "${branches[@]}" -- "${unique_tags[@]}" &
+    git_push_to_remote "${remote}" "${branches[@]}" -- "${unique_tags[@]}" &
     push_label[$!]="${remote}"
   done
 
@@ -2574,6 +2589,57 @@ make_git_tag_push() {
   fi
 
   make_output_info "atomic push succeeded: branches=[${branches[*]}] tags=[${unique_tags[*]}] remotes=[${remotes[*]}]"
+}
+
+## See 'genmkfile git-push' help text above for the contract. Tag-less
+## sibling of make_git_tag_push: no signed tag at tip is required, and
+## no make_git_tag_shared version/package state is touched, so it runs
+## in ANY repo. Per-remote skip of an up-to-date tip lives in
+## git_push_to_remote, so re-running does not hammer remotes.
+make_git_push() {
+  local branch remote current_branch
+  local -a branches remotes
+  local -A push_label=()
+
+  source "${HELPER_SCRIPTS_PATH:-}/usr/libexec/helper-scripts/parallel.bsh"
+
+  make_require git
+
+  [ -n "${make_git_push_remotes:-}" ] || make_git_push_remotes="origin"
+
+  if [ -n "${make_git_push_branches:-}" ]; then
+    read -r -a branches <<< "${make_git_push_branches}"
+    [ "${#branches[@]}" -gt 0 ] \
+      || die 1 "make_git_push_branches is set but parses to an empty list (whitespace-only?)."
+    for branch in "${branches[@]}"; do
+      git show-ref --verify --quiet -- "refs/heads/${branch}" \
+        || die 1 "branch '${branch}' (from make_git_push_branches) does not exist in this repo."
+    done
+  else
+    current_branch="$(git rev-parse --abbrev-ref HEAD)"
+    [ "${current_branch}" != "HEAD" ] \
+      || die 1 "HEAD is detached; cannot determine current branch. Set make_git_push_branches or check out a branch."
+    branches=( "${current_branch}" )
+  fi
+
+  read -r -a remotes <<< "${make_git_push_remotes}"
+  [ "${#remotes[@]}" -gt 0 ] \
+    || die 1 "make_git_push_remotes is set but parses to an empty list (whitespace-only?)."
+  for remote in "${remotes[@]}"; do
+    git remote get-url -- "${remote}" &>/dev/null \
+      || die 1 "remote '${remote}' (from make_git_push_remotes) does not exist in this repo."
+  done
+
+  for remote in "${remotes[@]}"; do
+    git_push_to_remote "${remote}" "${branches[@]}" &
+    push_label[$!]="${remote}"
+  done
+
+  if ! parallel_wait push_label; then
+    die 1 "push failed: branches=[${branches[*]}] remote(s)=[${parallel_failures[*]}]"
+  fi
+
+  make_output_info "push succeeded: branches=[${branches[*]}] remotes=[${remotes[*]}]"
 }
 
 make_git_tag_show_latest() {
@@ -2763,6 +2829,10 @@ if was_executed "${BASH_SOURCE[0]}"; then
   for __arg in "$@"; do
     case "${__arg}" in
     "" | help | --)
+      ;;
+    git-push)
+      ## Pure git operation: no debian/control or dpkg-parsechangelog,
+      ## so it runs in ANY repo, not only a debian package tree.
       ;;
     deb-build-dep | deb-run-dep | deb-all-dep)
       __needs_dependencies=true
