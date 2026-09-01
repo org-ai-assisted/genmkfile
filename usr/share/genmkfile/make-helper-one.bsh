@@ -665,11 +665,17 @@ mkdir -p -- ${make_cowbuilder_dist_folder}"
     fi
   fi
 
-  if ! test -d "${DISTDIR}"; then
-    exit_with_error 1 "DISTDIR '${DISTDIR}' does not exist!"
-  fi
-  if ! test -w "${DISTDIR}"; then
-    exit_with_error 1 "DISTDIR '${DISTDIR}' is not writeable!"
+  ## Only a dist-writing target (enforce) needs DISTDIR to exist + be writable.
+  ## A non-dist action (git-tag-* / git-verify, deb-*-dep) uses DISTDIR only as a
+  ## path prefix inside make_get_variables and never writes there, so a read-only
+  ## package parent ('../') must not abort it.
+  if [ "${make_enforce_cowbuilder_distdir:-true}" = "true" ]; then
+    if ! test -d "${DISTDIR}"; then
+      exit_with_error 1 "DISTDIR '${DISTDIR}' does not exist!"
+    fi
+    if ! test -w "${DISTDIR}"; then
+      exit_with_error 1 "DISTDIR '${DISTDIR}' is not writeable!"
+    fi
   fi
 }
 
@@ -2855,7 +2861,9 @@ if was_executed "${BASH_SOURCE[0]}"; then
   __needs_dependencies=false
   for __arg in "$@"; do
     case "${__arg}" in
-    git-push | help | test)
+    git-push | help | test | '' | --)
+      ## Non-targets ('' / end-of-options) and pure query/dummy targets need no
+      ## DISTDIR, version info, or cowbuilder folder.
       ;;
     git-tag-push | git-tag-show | git-tag-show-latest | git-tag-sign \
       | git-tag-verify | git-tag-check | git-commit-verify | git-verify)
