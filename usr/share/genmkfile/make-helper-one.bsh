@@ -857,9 +857,9 @@ genmkfile git-tag-push
 genmkfile git-push
    Atomic push of branches (NO tags) to each listed remote, in
    parallel. Unsigned: unlike git-tag-push it requires no tag at the
-   branch tip, so it is the path for dev/backup pushes. A remote whose
-   tracking ref already equals the local tip is skipped (no git push),
-   so re-running does not hammer up-to-date remotes.
+   branch tip, so it is the path for dev/backup pushes. Re-running is
+   cheap and safe: 'git push' no-ops ('Everything up-to-date') on a
+   remote that is already current, so no local-state pre-check is done.
    Default: current branch -> 'origin'.
    Environment variables:
      make_git_push_branches       space-separated branch list (unset -> current branch)
@@ -2515,10 +2515,11 @@ git_tag_push_cache_write() {
 ## and make_git_push (branches only): 'exit_with_error' kills only the sub-shell;
 ## parent's 'wait' aggregates per-remote failures. Args:
 ## <remote> <branch>... [-- <tag>...]. With no '--'/tags it pushes only
-## the given branches. A branch already at the remote tip (per its
-## tracking ref) is skipped, so an up-to-date remote is never hammered.
+## the given branches. Branches are pushed unconditionally ('git push' no-ops
+## cheaply when the remote is already current); an already-pushed immutable tag
+## is skipped via the local push cache.
 git_push_to_remote() {
-  local remote branch tag tag_sha local_sha remote_sha arg sep_seen
+  local remote branch tag tag_sha arg sep_seen
   local -a branches tags tags_to_push refspecs
 
   remote="$1"
@@ -2549,25 +2550,14 @@ git_push_to_remote() {
     fi
   done
 
+  ## Push branches unconditionally: 'git push --atomic' already no-ops cheaply when the branch is
+  ## up to date ("Everything up-to-date", no object transfer) -- the dm unsigned-push model
+  ## (dm-packaging-helper-script's pkg_git_push_atomic_unsigned). A local tracking-ref pre-check
+  ## went STALE (url repointed / a peer's push) and skipped a needed push; an ls-remote pre-check
+  ## adds a round-trip BEFORE the push (two remote hits when a push is needed). Both are worse than
+  ## letting push decide. (Immutable tags stay cached above: a local check, no round-trip.)
   refspecs=()
   for branch in "${branches[@]}"; do
-    local_sha="$(git rev-parse --verify "refs/heads/${branch}^{commit}")"
-    ## Ask the ACTUAL remote (ls-remote), NOT the local tracking ref: a tracking ref goes stale
-    ## (never fetched, or the remote url was repointed), so trusting it would skip a push the
-    ## remote genuinely needs and report success while the branch never lands. ls-remote is a
-    ## light read (no object transfer), so the anti-hammer intent -- skip a needless push -- holds.
-    ## Empty result (branch absent, or remote unreachable) -> do NOT skip: push (and fail loud if
-    ## the remote is truly unreachable), never silently treat "cannot tell" as up-to-date.
-    ## Match the ref name EXACTLY (field 2), not just the first line: an ls-remote refspec pattern
-    ## tail-matches, so a decoy ref ending in '/refs/heads/<branch>' (e.g. a filter-branch
-    ## 'refs/original/...' leftover) is also returned -- trusting NR==1 could read the decoy's sha
-    ## and re-introduce the phantom "already at tip" skip.
-    remote_sha="$(git ls-remote "${remote}" "refs/heads/${branch}" 2>/dev/null \
-      | awk -v ref="refs/heads/${branch}" '$2 == ref { print $1; exit }')"
-    if [ -n "${remote_sha}" ] && [ "${remote_sha}" = "${local_sha}" ]; then
-      make_output_cached "branch '${branch}' (${local_sha:0:12}) already at remote '${remote}' tip"
-      continue
-    fi
     refspecs+=( "refs/heads/${branch}:refs/heads/${branch}" )
   done
   for tag in "${tags_to_push[@]}"; do
@@ -2575,7 +2565,7 @@ git_push_to_remote() {
   done
 
   if [ "${#refspecs[@]}" -eq 0 ]; then
-    make_output_cached "nothing to push to '${remote}' (all branches at remote tip, all tags cached)"
+    make_output_cached "nothing to push to '${remote}' (no branches given, all tags cached)"
     return 0
   fi
 
@@ -2658,8 +2648,8 @@ make_git_tag_push() {
 ## See 'genmkfile git-push' help text above for the contract. Tag-less
 ## sibling of make_git_tag_push: no signed tag at tip is required, and
 ## no make_git_tag_shared version/package state is touched, so it runs
-## in ANY repo. Per-remote skip of an up-to-date tip lives in
-## git_push_to_remote, so re-running does not hammer remotes.
+## in ANY repo. Re-running is cheap: git_push_to_remote lets 'git push'
+## no-op on an already-current remote (no local-state pre-check).
 make_git_push() {
   local branch remote current_branch
   local -a branches remotes
