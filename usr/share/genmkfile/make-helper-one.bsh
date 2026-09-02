@@ -1073,8 +1073,9 @@ make_debinstfile_create() {
   local new_file filename_without_dot filename_without_hash \
     cleaned_filename_without_hash pkg_name \
     filename_hash_dir filename_hash_base \
-    temp_deb_install_file real_deb_install_file
-  local -a find_cmd
+    temp_deb_install_file real_deb_install_file \
+    file_name sorted_install_list
+  local -a find_cmd install_records
   local -A delete_yet
 
   make_require safe-rm sponge
@@ -1094,11 +1095,21 @@ make_debinstfile_create() {
     true "multi-package hash filename found: yes"
     find_cmd+=(-print0)
 
-    ## Process substitution, NOT 'find | while': the loop body runs in THIS shell, so
-    ## exit_with_error on an invalid package name aborts the whole run. Piped, the loop is
-    ## a subshell and the die would only exit IT -- silently skipping that file and every
-    ## file sorted after it (partial, wrong .install) while the build reports success.
-    while IFS= read -r -d '' file_name; do
+    ## Capture the file list to a temp with an EXPLICIT rc check (pipefail in a subshell so a
+    ## find OR sort failure is caught), then read the loop from an in-memory array. Neither a
+    ## pipe nor process substitution ('< <(find | sort)') exposes the producer's exit status --
+    ## if find/sort dies AFTER partial output, the loop would accept the truncated list and the
+    ## build would report success with a partial .install. Reading from the array (not a pipe)
+    ## also keeps the loop in THIS shell, so exit_with_error on a bad package name stays fatal.
+    sorted_install_list="$(mktemp)" \
+      || exit_with_error 1 "mktemp failed while listing multi-package install files"
+    if ! ( set -o pipefail; "${find_cmd[@]}" | LC_ALL='C' sort -z ) > "${sorted_install_list}"; then
+      safe-rm --force -- "${sorted_install_list}"
+      exit_with_error 1 "listing/sorting multi-package install files failed"
+    fi
+    mapfile -d '' -t install_records < "${sorted_install_list}"
+    safe-rm --force -- "${sorted_install_list}"
+    for file_name in "${install_records[@]}"; do
         filename_without_dot="${file_name#./}"
         ## Strip the '#<pkgname>' delimiter from the BASENAME only -- same basis as
         ## pkg_name below (after the basename's LAST '#'). Deriving the dest from the
@@ -1139,7 +1150,7 @@ make_debinstfile_create() {
         fi
 
         printf "%s\n" "${filename_without_dot} => ${cleaned_filename_without_hash}" | sponge -a -- "${temp_deb_install_file}"
-    done < <("${find_cmd[@]}" | LC_ALL='C' sort -z)
+    done
 
     for new_file in "${genmkfile_temp_dir}"/*.install; do
       real_deb_install_file="debian/${new_file##*/}"
@@ -2507,7 +2518,7 @@ git_tag_push_cache_write() {
 ## the given branches. A branch already at the remote tip (per its
 ## tracking ref) is skipped, so an up-to-date remote is never hammered.
 git_push_to_remote() {
-  local remote branch tag tag_sha local_sha tracking_ref arg sep_seen
+  local remote branch tag tag_sha local_sha remote_sha arg sep_seen
   local -a branches tags tags_to_push refspecs
 
   remote="$1"
@@ -2541,9 +2552,14 @@ git_push_to_remote() {
   refspecs=()
   for branch in "${branches[@]}"; do
     local_sha="$(git rev-parse --verify "refs/heads/${branch}^{commit}")"
-    tracking_ref="refs/remotes/${remote}/${branch}"
-    if git show-ref --verify --quiet -- "${tracking_ref}" \
-        && [ "$(git rev-parse --verify "${tracking_ref}^{commit}")" = "${local_sha}" ]; then
+    ## Ask the ACTUAL remote (ls-remote), NOT the local tracking ref: a tracking ref goes stale
+    ## (never fetched, or the remote url was repointed), so trusting it would skip a push the
+    ## remote genuinely needs and report success while the branch never lands. ls-remote is a
+    ## light read (no object transfer), so the anti-hammer intent -- skip a needless push -- holds.
+    ## Empty result (branch absent, or remote unreachable) -> do NOT skip: push (and fail loud if
+    ## the remote is truly unreachable), never silently treat "cannot tell" as up-to-date.
+    remote_sha="$(git ls-remote "${remote}" "refs/heads/${branch}" 2>/dev/null | awk 'NR==1 {print $1}')"
+    if [ -n "${remote_sha}" ] && [ "${remote_sha}" = "${local_sha}" ]; then
       make_output_cached "branch '${branch}' (${local_sha:0:12}) already at remote '${remote}' tip"
       continue
     fi
