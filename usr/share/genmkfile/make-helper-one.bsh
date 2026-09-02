@@ -2558,7 +2558,12 @@ git_push_to_remote() {
     ## light read (no object transfer), so the anti-hammer intent -- skip a needless push -- holds.
     ## Empty result (branch absent, or remote unreachable) -> do NOT skip: push (and fail loud if
     ## the remote is truly unreachable), never silently treat "cannot tell" as up-to-date.
-    remote_sha="$(git ls-remote "${remote}" "refs/heads/${branch}" 2>/dev/null | awk 'NR==1 {print $1}')"
+    ## Match the ref name EXACTLY (field 2), not just the first line: an ls-remote refspec pattern
+    ## tail-matches, so a decoy ref ending in '/refs/heads/<branch>' (e.g. a filter-branch
+    ## 'refs/original/...' leftover) is also returned -- trusting NR==1 could read the decoy's sha
+    ## and re-introduce the phantom "already at tip" skip.
+    remote_sha="$(git ls-remote "${remote}" "refs/heads/${branch}" 2>/dev/null \
+      | awk -v ref="refs/heads/${branch}" '$2 == ref { print $1; exit }')"
     if [ -n "${remote_sha}" ] && [ "${remote_sha}" = "${local_sha}" ]; then
       make_output_cached "branch '${branch}' (${local_sha:0:12}) already at remote '${remote}' tip"
       continue
