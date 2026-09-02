@@ -304,17 +304,16 @@ make_get_dependencies() {
 ## 'all' is handled separately by the caller.
 make_architecture_covers_target() {
   local architecture_field="$1" target="$2" architecture_token
-  ## $architecture_field is a space-separated list that must word-split.
+  ## $architecture_field is a space-separated list of Debian arch names/wildcards that must
+  ## word-split. Match each with 'dpkg-architecture -i' (the target set as the host arch) rather
+  ## than a hand-rolled case: it is the only correct matcher for wildcards. A pure-bash test cannot
+  ## get 'any-<cpu>' right -- e.g. 'any-arm' matches armhf, whose CPU is 'arm' not 'armhf' -- so the
+  ## old code silently dropped a covered package's .deb from make_package_debs_files_list.
   # shellcheck disable=SC2086
   for architecture_token in ${architecture_field}; do
-    case "${architecture_token}" in
-      any | linux-any)
-        return 0
-        ;;
-      "${target}" | "linux-${target}")
-        return 0
-        ;;
-    esac
+    if dpkg-architecture -a "${target}" -i "${architecture_token}" 2>/dev/null; then
+      return 0
+    fi
   done
   return 1
 }
@@ -361,10 +360,23 @@ make_parse_changelog_version() {
 ## clearing all_package_debs_are_arch_all when any stanza builds architecture-dependent.
 ## Reads make_source_package_name / make_pkg_version / make_pkg_revision / target_architecture /
 ## DISTDIR / make_debian_control_file_absolute_path from the caller. A standalone function --
-## not an inline block -- so genmkfile-tests can source and drive it directly.
-make_get_variables_parse_stanzas() {
+## not an inline block -- so genmkfile-tests can source and drive it directly. NOT named 'make_*'
+## on purpose: make_parse_cmd dispatches 'make_<arg>', so a make_-prefixed helper would be callable
+## as a bogus CLI target and would double-append to the (already-populated) globals.
+parse_control_package_stanzas() {
   local package binary_package_architecture current_field line skip_debs_artifact
-  local package_name_architecture continuation temp
+  local package_name_architecture continuation temp stanza_list
+  ## grep-dctrl exits non-zero and emits only the stanzas parsed SO FAR on a malformed control (a
+  ## line missing its colon after a valid stanza). A process substitution ('done < <(grep-dctrl)')
+  ## would swallow that exit status -- the loop would read the truncated output and the build would
+  ## SILENTLY drop the remaining binary packages. Capture to a temp (which preserves grep-dctrl's
+  ## trailing blank, so the last stanza still commits) with an explicit rc check; a bad control
+  ## aborts loud.
+  stanza_list="$(mktemp)" || exit_with_error 1 "mktemp failed while parsing debian/control"
+  if ! grep-dctrl --show-field=Package,Architecture '' "${make_debian_control_file_absolute_path}" > "${stanza_list}"; then
+    safe-rm --force -- "${stanza_list}"
+    exit_with_error 1 "parsing debian/control failed (grep-dctrl) -- malformed control?"
+  fi
   package=""
   binary_package_architecture=""
   current_field=""
@@ -457,7 +469,8 @@ make_get_variables_parse_stanzas() {
         esac
       ;;
     esac
-  done < <(grep-dctrl --show-field=Package,Architecture '' "${make_debian_control_file_absolute_path}")
+  done < "${stanza_list}"
+  safe-rm --force -- "${stanza_list}"
 }
 
 make_get_variables() {
@@ -599,7 +612,7 @@ make_get_variables() {
   ## folding) into make_package_list + make_package_debs_files_list. A standalone function
   ## so the parser can be sourced and driven directly by genmkfile-tests.
   all_package_debs_are_arch_all="true"
-  make_get_variables_parse_stanzas
+  parse_control_package_stanzas
 
   true "make_package_list: ${make_package_list[*]}"
   true "make_package_debs_files_list: ${make_package_debs_files_list[*]}"
@@ -1053,20 +1066,9 @@ make_undebdist() {
 }
 
 make_debinstfile() {
-  ## calamares-settings-debian comes with debian/install by upstream default.
-  ## If file debian/calamares-settings-debian.install was created, that would result in debian/install
-  ## being ignored and in an empty package. Therefore, if debian/install already exists, do not
-  ## automatically create a debian/package-name.install file.
-  if test -f "${make_debian_non_package_specific_install_file_relative_path}"; then
-    return 0
-  fi
-
-  if test -f "${make_debian_install_file_relative_path}"; then
-    if grep --quiet -- "nogenmkfile" "${make_debian_install_file_relative_path}"; then
-      return 0
-    fi
-  fi
-
+  ## Public target. The overwrite guards (an upstream debian/install; a hand-written
+  ## debian/<pkg>.install carrying the 'nogenmkfile' opt-out) live in make_debinstfile_create,
+  ## so a direct 'genmkfile debinstfile-create' cannot bypass them either.
   make_debinstfile_create
 }
 
@@ -1078,6 +1080,19 @@ make_debinstfile_create() {
     file_name sorted_install_list
   local -a find_cmd install_records
   local -A delete_yet
+
+  ## Overwrite guards, enforced HERE (not only in the make_debinstfile wrapper) so a direct
+  ## 'genmkfile debinstfile-create' cannot clobber a maintainer-provided install file:
+  ##  - an upstream debian/install (e.g. calamares-settings-debian) -- generating per-package
+  ##    files alongside it makes dh ignore it and ship an EMPTY package;
+  ##  - a hand-written debian/<pkg>.install carrying the 'nogenmkfile' opt-out marker.
+  if test -f "${make_debian_non_package_specific_install_file_relative_path:-}"; then
+    return 0
+  fi
+  if test -f "${make_debian_install_file_relative_path:-}" \
+     && grep --quiet -- "nogenmkfile" "${make_debian_install_file_relative_path}"; then
+    return 0
+  fi
 
   make_require safe-rm sponge
 
