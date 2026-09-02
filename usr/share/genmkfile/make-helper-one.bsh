@@ -309,9 +309,12 @@ make_architecture_covers_target() {
   ## than a hand-rolled case: it is the only correct matcher for wildcards. A pure-bash test cannot
   ## get 'any-<cpu>' right -- e.g. 'any-arm' matches armhf, whose CPU is 'arm' not 'armhf' -- so the
   ## old code silently dropped a covered package's .deb from make_package_debs_files_list.
+  ## '-f' is REQUIRED: dpkg-architecture ignores '-a' when DEB_HOST_ARCH is already set in the
+  ## environment (a cross-build, or after a prior 'eval $(dpkg-architecture -s)'), so without it
+  ## the match reads the ENV arch, not ${target} -- dropping a covered .deb or inventing one.
   # shellcheck disable=SC2086
   for architecture_token in ${architecture_field}; do
-    if dpkg-architecture -a "${target}" -i "${architecture_token}" 2>/dev/null; then
+    if dpkg-architecture -f -a "${target}" -i "${architecture_token}" 2>/dev/null; then
       return 0
     fi
   done
