@@ -1,5 +1,13 @@
 #!/bin/bash
 
+## Copyright (C) 2012 - 2026 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
+## See the file COPYING for copying conditions.
+
+## style-ok: no-strict
+## Sourced-only function library (make-helper.bsh and make-helper-one.bsh source
+## it); it must not set strict-mode, which would leak 'errexit'/'nounset'/
+## 'pipefail' into the sourcing shell.
+
 make_shared_function() {
    ## Detect debian/control. Set path variables to empty when the
    ## file is absent so callers that need it can fail with a
@@ -16,10 +24,13 @@ make_shared_function() {
    ## make_use_git_describe_for_version flow through this preamble
    ## unaffected.
    make_debian_control_file_relative_path="debian/control"
-   if [ -f "$make_debian_control_file_relative_path" ]; then
-      make_debian_control_file_absolute_path="$(realpath -- "$make_debian_control_file_relative_path")"
+   ## make_debian_control_file_absolute_path is consumed by make-helper-one.bsh.
+   # shellcheck disable=SC2034
+   if [ -f "${make_debian_control_file_relative_path}" ]; then
+      make_debian_control_file_absolute_path="$(realpath -- "${make_debian_control_file_relative_path}")"
    else
       make_debian_control_file_relative_path=""
+      # shellcheck disable=SC2034
       make_debian_control_file_absolute_path=""
    fi
 

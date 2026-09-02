@@ -52,10 +52,9 @@ Reference for the behaviour of `genmkfile deb-pkg` when `make_use_cowbuilder` is
   does not (it only runs the Makefile's `clean`).
 - cowbuilder does not hit the residue problem -- it builds from the source tarball
   inside the chroot.
-- ANY captured lintian output is fatal by default -- not just warnings. The handler is
-  gated on the output being non-empty, and the default opts add `--pedantic --info
-  --display-info`, so an informational note alone fails the build. It fires after the
-  `.deb` already exists; see the `make_use_lintian` knob below.
+- Lintian is fatal by default on ANY captured output (even an info note -- default opts add
+  `--pedantic --info --display-info`), and fires AFTER the `.deb` already exists; see the
+  `make_use_lintian` knob below.
 
 ## cowbuilder mode (chroot build)
 
@@ -97,7 +96,7 @@ genmkfile deb-pkg   # runs deb-cleanup, dist, debdist, debdsc, deb-pkg-build its
 
 Gotchas learned:
 - dm's `1300` fails standalone WITHOUT `1200` first (debootstrap).
-- The TMPDIR break is fixed by dm's base (in-chroot `mkdir $TMPDIR`), NOT by passing the config alone -- a config-only build still fails `dpkg-deb: failed to make temporary file`.
+- The TMPDIR break is handled by genmkfile's own build-time `env --unset` (see "Build facts"), independent of dm's base or any config -- do not add a TMPDIR workaround on top.
 - `genmkfile dist` errors "Empty directory found!" for TWO different reasons -- check which:
   - A genuinely empty dir in the source tree: fix with an executable `./make-helper-overrides.bsh` defining `make_dist_hook_pre` to drop a placeholder -- don't move the package off genmkfile.
   - Build residue from a previous in-place `debuild`: `debian/.debhelper/generated/_source/home` is left behind empty. Clear it with `genmkfile deb-cleanup` (runs `debian/rules clean` plus the debhelper-file removal). `genmkfile distclean` does NOT remove it -- it only runs the Makefile's `clean` target. Note `deb-pkg` already runs `deb-cleanup` first, so this usually self-corrects on the next build.
@@ -141,7 +140,8 @@ sudo cowbuilder --create \
 - Update it later with `--update --basepath ...`.
 - Build-deps (e.g. `debhelper`) must be reachable from `--mirror`; the package's *runtime* deps are NOT needed at build time.
 - So `Architecture: all` packages whose only build-dep is debhelper build against a plain `deb.debian.org` base even if runtime deps (signal-cli, etc.) live elsewhere.
-- Caveat: `libpam-tmpdir` breaks cowbuilder (sets TMPDIR) -- keep it out of the build host.
+- `libpam-tmpdir` (which sets `TMPDIR=/tmp/user/0`) is handled by genmkfile's build-time
+  `env --unset` (see "Build facts"); it can stay installed on the build host.
 
 ## Other useful targets
 
@@ -157,6 +157,16 @@ sudo cowbuilder --create \
 - `deb-chl-bumpup-*` (changelog bump).
 - `git-tag-sign/-verify`.
 - List all: `genmkfile help`.
+
+## Man pages
+
+- `genmkfile manpages` renders every `man/*.ronn` to `auto-generated-man-pages/<name>`
+  with a deterministic date and `--manual`/`--organization` = the source package name.
+- COMMIT `auto-generated-man-pages/` to git; run `genmkfile manpages` (and recommit) only
+  when a `.ronn` changes. Do NOT gitignore them, generate at build time, or Build-Depend on
+  `ronn`.
+- `debian/rules` just installs them: `override_dh_installman: dh_installman
+  $(CURDIR)/auto-generated-man-pages/*` (this package's own `debian/rules` is the model).
 
 ## Extending: overrides (no forking the engine)
 
@@ -184,3 +194,33 @@ sudo cowbuilder --create \
 - But `sudo`'s `env_reset` strips both, so anything run via `sudo` inside the chroot runs **without** cowdancer -- its writes/unlinks hit the hardlinked-into-base inode directly and **corrupt the shared base**.
 - Harmless for a one-shot `--execute` (the buildplace is discarded), but do NOT reuse a base across runs if a non-cowdancer step mutated files in it (e.g. `VBoxManage unregistervm --delete` deleting a VM whose disk/registry are hardlinked into the base).
 - This is also why a root command run via `sudo` inside the chroot can fail with `cp: ... Cannot allocate memory`: `libcowdancer` stays `LD_PRELOAD`'ed while `COWDANCER_ILISTFILE` is gone, leaving the COW layer half-initialized -- run such commands directly (without sudo) so the inherited cowdancer env stays intact.
+
+## Build facts (host-generator, TMPDIR, changelog)
+
+- **genmkfile is a HOST-SIDE generator, NOT a Build-Depends.** It writes `debian/*.install`
+  before the source package is packed; `debian/rules` is a plain `dh $@`, so nothing in the
+  build chroot invokes it -- Build-Depends is debhelper-only. A stray `genmkfile` build-dep is
+  the ONLY reason a package can't resolve deps on a plain deb.debian.org base (genmkfile lives
+  only in the kicksecure repo). Drop it; the build needs no local-repo/OTHERMIRROR/D-hook.
+- **libpam-tmpdir TMPDIR break -- FIXED at the root in genmkfile.** libpam-tmpdir (Kicksecure
+  default) gives sudo's root session `TMPDIR=/tmp/user/0`, absent in the chroot ->
+  `dpkg-deb: failed to make temporary file` -> `pbuilder-satisfydepends failed`. genmkfile now
+  runs `env --unset=TMPDIR --unset=TMP --unset=TEMPDIR --unset=TEMP` immediately before every
+  `cowbuilder --build` (`make-helper-one.bsh`), so NO per-build `COWBUILDER_PREFIX` or
+  `--configfile` is needed to survive it, and libpam-tmpdir can stay installed. Caveat: the
+  `cowbuilder --create` path is NOT covered -- a caller that creates a base under sudo still
+  needs the same unset itself (see the private-ai-config skill's `ensure-cowbuilder-base`).
+- **cowbuilder essentials:** `make_use_cowbuilder=true` AND `make_cowbuilder_dist_folder` are
+  BOTH required, or the cowbuilder-guard refuses it as an in-place build. Base
+  `/var/cache/pbuilder/base.cow_<arch>` (`cow.cow_<arch>` is scratch); `/var` resets at boot,
+  recreate ~4min (`cowbuilder --create --basepath ... --distribution trixie --mirror
+  https://deb.debian.org/debian`). `make_use_lintian=false` skips pre-existing findings.
+  `genmkfile dist` tars the WORKING tree -- confirm `git status` clean first.
+- **NEVER hand-edit `debian/changelog`** in genmkfile packages -- it is AUTO-GENERATED and
+  gate-enforced (`check_changelog_no_manual`): a commit touching it HARD-FAILS unless it is a
+  genmkfile auto-bump (exact subject `bumped changelog version` + a changelog-family-only diff)
+  or carries `Changelog-manual-ok: <reason>` (prefer the bump). Workflow: (1) commit code only;
+  (2) `genmkfile deb-chl-bumpup-major` (needs `export DEBFULLNAME DEBEMAIL` first -- the
+  Bash-tool shell is non-interactive; it bumps upstream 0.1->0.2->...->1.0 and resets the
+  revision to `-1`, the Kicksecure convention, NOT a `-N` bump); (3) commit the changelog with
+  that exact subject.
