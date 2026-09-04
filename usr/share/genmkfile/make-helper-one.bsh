@@ -397,7 +397,21 @@ parse_control_package_stanzas() {
         current_field="architecture"
         ;;
       "")
-        [ -n "${package}" ] || continue
+        ## Normalise 'package' BEFORE the emptiness guard, then re-check on the normalised value.
+        ## A folded 'Package:\n mypkg' arrives as ' mypkg'; grep-dctrl also emits a blank-only
+        ## 'Package:' field as whitespace. Left unstripped the leading blank corrupts the
+        ## make_package_list entry (reprepro remove/removesrc, deb-cleanup) and the expected .deb
+        ## name; and a blank-only value MUST be treated as absent, not committed as an empty name
+        ## -- an empty name makes deb-clean/deb-cleanup act on 'debian/' itself (test -d is true).
+        read -r package <<<"${package}"
+        if [ -z "${package}" ]; then
+          ## Skip a stanza with no / blank-only Package:, but RESET the accumulator first: a bare
+          ## 'continue' would keep this stanza's Architecture/field state and leak it into the
+          ## NEXT stanza (which would then read a wrong architecture).
+          binary_package_architecture=""
+          current_field=""
+          continue
+        fi
         ## Normalise the (possibly folded) architecture value: strip leading/trailing blanks so
         ## a value that arrived only on a continuation line ('Architecture:\n all') still matches
         ## the exact '= all' test below; interior blanks are fine (that test aside, the value is
@@ -1098,7 +1112,10 @@ make_debinstfile_create() {
   ## 'genmkfile debinstfile-create' cannot clobber a maintainer-provided install file:
   ##  - an upstream debian/install (e.g. calamares-settings-debian) -- generating per-package
   ##    files alongside it makes dh ignore it and ship an EMPTY package;
-  ##  - a hand-written debian/<pkg>.install carrying the 'nogenmkfile' opt-out marker.
+  ##  - a 'nogenmkfile' marker in debian/<source>.install is a GLOBAL opt-out: it stops the
+  ##    whole generation deliberately (a maintainer opting the package out entirely). A marker
+  ##    in a NON-source binary package's debian/<binpkg>.install is a per-file opt-out, handled
+  ##    in the multi-package loop below -- it preserves only that file, others still generate.
   if test -f "${make_debian_non_package_specific_install_file_relative_path:-}"; then
     return 0
   fi
