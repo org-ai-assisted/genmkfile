@@ -1075,6 +1075,16 @@ make_debinstfile() {
   make_debinstfile_create
 }
 
+make_debinstfile_has_nogenmkfile_marker() {
+  ## True if the install file carries the 'nogenmkfile' opt-out marker: a line whose sole
+  ## meaningful content is 'nogenmkfile' -- a bare marker line, or a comment ('## nogenmkfile').
+  ## A GENERATED entry is always a 'SOURCE => DEST' mapping (more than the bare token), so it
+  ## never matches -- a path or a '#'-prefixed mapping that merely contains the substring (e.g.
+  ## 'usr/bin/nogenmkfile', '#nogenmkfile#pkg => ...') does NOT trip the opt-out and freeze
+  ## future updates.
+  grep --quiet --extended-regexp -- '^[[:space:]]*#*[[:space:]]*nogenmkfile[[:space:]]*$' "$1"
+}
+
 make_debinstfile_create() {
   local new_file filename_without_dot filename_without_hash \
     cleaned_filename_without_hash pkg_name \
@@ -1093,7 +1103,7 @@ make_debinstfile_create() {
     return 0
   fi
   if test -f "${make_debian_install_file_relative_path:-}" \
-     && grep --quiet -- "nogenmkfile" "${make_debian_install_file_relative_path}"; then
+     && make_debinstfile_has_nogenmkfile_marker "${make_debian_install_file_relative_path}"; then
     return 0
   fi
 
@@ -1174,6 +1184,14 @@ make_debinstfile_create() {
     for new_file in "${genmkfile_temp_dir}"/*.install; do
       real_deb_install_file="debian/${new_file##*/}"
       if test -f "${real_deb_install_file}"; then
+        ## Per-target 'nogenmkfile' opt-out, same intent as the single-source-package
+        ## guard above: a hand-maintained debian/<binary-pkg>.install carrying the marker
+        ## is never overwritten. Without this, the multi-package loop clobbers EVERY
+        ## differing binary-package install file, so a maintainer's hand-written content
+        ## in a binary-package .install is silently lost.
+        if make_debinstfile_has_nogenmkfile_marker "${real_deb_install_file}"; then
+          continue
+        fi
         if cmp -s -- "${new_file}" "${real_deb_install_file}"; then
           continue
         fi
