@@ -412,6 +412,19 @@ parse_control_package_stanzas() {
           current_field=""
           continue
         fi
+        ## Validate the control-derived binary package name before it is interpolated into
+        ## deletion paths (make_deb_clean: safe-rm --recursive -- "debian/${package}";
+        ## make_deb_cleanup: DISTDIR globs). Mirror the multi-package '#pkgname' guard exactly:
+        ## reject a name containing '/' or starting with '.', fail closed -- those are the only
+        ## forms that let "debian/${package}" escape the tree ('/' -> '../' or an absolute path;
+        ## a leading '.' -> a bare '..'). An interior '.' is a valid Debian name and is allowed.
+        ## genmkfile parses FIRST-PARTY debian/control (our own packages), so this is
+        ## defence-in-depth against an accidental/malformed value, not a patched active vuln.
+        case "${package}" in
+          *'/'* | '.'*)
+            exit_with_error 1 "invalid binary package name '${package}' in debian/control (must not contain '/' or start with '.')"
+            ;;
+        esac
         ## Normalise the (possibly folded) architecture value: strip leading/trailing blanks so
         ## a value that arrived only on a continuation line ('Architecture:\n all') still matches
         ## the exact '= all' test below; interior blanks are fine (that test aside, the value is
@@ -967,7 +980,8 @@ find \
       -not -path '*/\.git/*' \
       -not -path '*/\.git' \
       -not -name '.gitignore' \
-      -not -path './debian*' \
+      -not -path './debian' \
+      -not -path './debian/*' \
       -print0 \
          | tar \
             --null \
@@ -991,7 +1005,8 @@ find \
     -not -path '*/\.git/*' \
     -not -path '*/\.git' \
     -not -name '.gitignore' \
-    -not -path './debian*' \
+    -not -path './debian' \
+    -not -path './debian/*' \
     -print0 |
     tar \
       --null \
@@ -1131,7 +1146,11 @@ make_debinstfile_create() {
   find_cmd+=(-not -path '*/\.git/*')
   find_cmd+=(-not -path '*/\.git')
   find_cmd+=(-not -name '.gitignore')
-  find_cmd+=(-not -path './debian*')
+  ## Exclude only the packaging dir './debian' and its contents -- NOT sibling top-level names
+  ## that merely start with 'debian' (e.g. 'debian-notes/', 'debianrc'). A bare './debian*' glob
+  ## swallowed those, silently dropping their files/packages.
+  find_cmd+=(-not -path './debian')
+  find_cmd+=(-not -path './debian/*')
   find_cmd+=(-iname '*#*')
   ## Files/symlinks only: a '#'-named DIRECTORY must not be emitted as an install
   ## entry (the '#' is the package delimiter, so such a dir is never a real target).
