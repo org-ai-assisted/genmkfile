@@ -2729,39 +2729,54 @@ if was_executed "${BASH_SOURCE[0]}"; then
   make_function_run make_source_overrides_file "$@"
   make_function_run make_source_overrides_folder "$@"
 
-  make_function_run make_get_distdir
-  make_function_run make_get_destdir
-
-  ## deb-{build,run,all}-dep only need Build-Depends / Depends parsed
-  ## from debian/control. Every other target additionally needs
-  ## dpkg-parsechangelog (from dpkg-dev, pulled in by build-essential)
-  ## which may be absent on a fresh system -- the user would run
-  ## 'genmkfile deb-build-dep' to install it. So call the full setup
-  ## only when a target actually needs it.
+  ## deb-{build,run,all}-dep only need Build-Depends / Depends parsed from
+  ## debian/control. Build targets additionally need dpkg-parsechangelog (from
+  ## dpkg-dev, pulled in by build-essential) which may be absent on a fresh
+  ## system -- the user would run 'genmkfile deb-build-dep' to install it. So
+  ## call the full setup only when a target actually needs it. Pure git ops need
+  ## none of it: git-push in particular must run in a NON-package repo (no
+  ## debian/control, no debian/changelog, no cowbuilder folder), so it must not
+  ## reach make_get_distdir's cowbuilder gate or make_get_variables. No git
+  ## target reads DISTDIR, so the git targets skip the distdir setup entirely.
+  __needs_distdir=false
   __needs_version_info=false
   __needs_dependencies=false
   for __arg in "$@"; do
     case "${__arg}" in
-    '' | help | --)
+    git-push | help | test | '' | --)
+      ## Pure git op / query / non-target: no DISTDIR, no version, no cowbuilder.
+      ;;
+    git-tag-push | git-tag-show | git-tag-show-latest | git-tag-sign \
+      | git-tag-verify | git-tag-check | git-commit-verify | git-verify)
+      ## Tag / verify ops: make_git_tag_shared needs make_source_package_name
+      ## from make_get_variables, but they read no DISTDIR.
+      __needs_version_info=true
       ;;
     deb-build-dep | deb-run-dep | deb-all-dep)
+      __needs_distdir=true
       __needs_dependencies=true
       ;;
     *)
+      __needs_distdir=true
       __needs_version_info=true
       ;;
     esac
   done
   ## No arguments falls through to make_all in make_parse_cmd; treat it
   ## like any other build target.
-  [ $# -eq 0 ] && __needs_version_info=true
+  [ $# -eq 0 ] && { __needs_distdir=true; __needs_version_info=true; }
+
+  if [ "${__needs_distdir}" = "true" ]; then
+    make_function_run make_get_distdir
+    make_function_run make_get_destdir
+  fi
 
   if [ "${__needs_version_info}" = "true" ]; then
     make_function_run make_get_variables
   elif [ "${__needs_dependencies}" = "true" ]; then
     make_function_run make_get_dependencies
   fi
-  unset __arg __needs_version_info __needs_dependencies
+  unset __arg __needs_distdir __needs_version_info __needs_dependencies
 
   make_function_run make_parse_cmd "$@"
   make_function_run make_deinit
