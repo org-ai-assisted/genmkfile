@@ -1009,7 +1009,7 @@ make_undebdist() {
   safe-rm --force -- "${make_debian_tarball_absolute_path}"
 }
 
-make_debinstfile_has_nogenmkfile_marker() {
+debinstfile_has_nogenmkfile_marker() {
   ## True if the install file carries the 'nogenmkfile' opt-out marker: a line whose sole
   ## meaningful content is 'nogenmkfile' -- a bare marker line, or a comment ('## nogenmkfile').
   ## A GENERATED entry is always a 'SOURCE => DEST' mapping (more than the bare token), so it
@@ -1046,7 +1046,7 @@ make_debinstfile_create() {
     return 0
   fi
   if test -f "${make_debian_install_file_relative_path:-}" \
-     && make_debinstfile_has_nogenmkfile_marker "${make_debian_install_file_relative_path}"; then
+     && debinstfile_has_nogenmkfile_marker "${make_debian_install_file_relative_path}"; then
     return 0
   fi
 
@@ -1125,7 +1125,7 @@ make_debinstfile_create() {
         ## carrying the marker is never overwritten. Without this, the multi-package loop
         ## clobbers EVERY differing binary-package install file, silently losing a maintainer's
         ## hand-written content.
-        if make_debinstfile_has_nogenmkfile_marker "${real_deb_install_file}"; then
+        if debinstfile_has_nogenmkfile_marker "${real_deb_install_file}"; then
           continue
         fi
         if cmp -s -- "${new_file}" "${real_deb_install_file}"; then
@@ -1839,7 +1839,7 @@ make_helper() {
   shopt -s globstar dotglob nullglob
   local source_directory source_fso file_without_pwd file_with_destdir
   local still_installed="false"
-  local fso_with_destdir_stat destdir_low_mode destdir_high_mode
+  local fso_with_destdir_stat
   local genmkfile_rsync_opts folder_permission_skip_list
 
   make_require safe-rm rsync
@@ -1950,11 +1950,12 @@ make_helper() {
           if [ "${source_fso_link_target}" != "${destination_link_target}" ]; then
             exit_with_error 1 "refusing to install: symlink '${source_fso}' -> '${source_fso_link_target}' was not installed at '${file_with_destdir}'. A symlink pointing outside the copied tree (absolute, or via '..') is skipped by 'rsync --safe-links' -- make it a relative in-tree symlink."
           fi
-          ## A KEPT dangling in-tree symlink cannot be chmod'ed (chmod follows to the missing
-          ## target), so skip it rather than let the 'stat' below abort under errexit.
-          if [ ! -e "${file_with_destdir}" ]; then
-            continue
-          fi
+          ## The symlink was installed. Do NOT fall through to the mode-fix: 'stat -c %a' on a
+          ## symlink reports its own (always 0777) mode, and 'chmod' without --no-dereference
+          ## FOLLOWS the link and rewrites the TARGET's mode -- silently stripping a setuid/setgid
+          ## on, or loosening, the real file (which globstar mode-fixes on its own visit). A
+          ## symlink's mode is not genmkfile's to manage, so skip it (kept or dangling alike).
+          continue
         fi
 
         ## Need to check first if it is a file...
@@ -2004,21 +2005,22 @@ make_helper() {
                   ;;
               esac
             fi
-            ## Fix the permission bits (low 3 octal digits) while PRESERVING any
-            ## setuid/setgid/sticky bit: a bare 3-digit 'chmod 755' clears them, silently
-            ## stripping setuid on a re-install. stat '%a' reports a set special bit as a
-            ## leading digit (e.g. '4755'); keep it, and compare/fix only the low 3 digits.
-            destdir_low_mode="${fso_with_destdir_stat: -3}"
-            destdir_high_mode="${fso_with_destdir_stat%"${destdir_low_mode}"}"
+            ## Normalise to the SOURCE-declared mode (0755 executable / 0644 not). git cannot
+            ## store setuid/setgid/sticky, so the source never declares them and they are NOT
+            ## genmkfile's to preserve: a stale destination special bit (e.g. a 4755 left by a
+            ## prior postinst) must be cleared to match the source, exactly as dh_fixperms does
+            ## -- keeping it would leave an updated 0755 binary silently setuid. Special bits are
+            ## re-applied post-install by maintainer scripts, not here. (A symlink source never
+            ## reaches this point -- it is skipped above, since 'chmod' would follow it.)
             if test -x "${source_fso}" || [ "${genmkfile_force_exec}" = "true" ]; then
-              if [ "${destdir_low_mode}" != "755" ]; then
-                make_output_info "chmod -- ${destdir_high_mode}755 '${file_with_destdir}' (executable, wrong mode)"
-                chmod -- "${destdir_high_mode}755" "${file_with_destdir}"
+              if [ "${fso_with_destdir_stat}" != "755" ]; then
+                make_output_info "chmod -- 755 '${file_with_destdir}' (executable, wrong mode)"
+                chmod -- 755 "${file_with_destdir}"
               fi
             else
-              if [ "${destdir_low_mode}" != "644" ]; then
-                make_output_info "chmod -- ${destdir_high_mode}644 '${file_with_destdir}' (non-executable, wrong mode)"
-                chmod -- "${destdir_high_mode}644" "${file_with_destdir}"
+              if [ "${fso_with_destdir_stat}" != "644" ]; then
+                make_output_info "chmod -- 644 '${file_with_destdir}' (non-executable, wrong mode)"
+                chmod -- 644 "${file_with_destdir}"
               fi
             fi
           fi
