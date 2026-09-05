@@ -150,6 +150,9 @@ git-verify:
 git-tag-push:
 	$(GENMKFILE_PATH)/make-helper.bsh git-tag-push
 
+git-push:
+	$(GENMKFILE_PATH)/make-helper.bsh git-push
+
 git-tag-show-latest:
 	$(GENMKFILE_PATH)/make-helper.bsh git-tag-show-latest
 

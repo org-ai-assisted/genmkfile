@@ -20,8 +20,6 @@ pushd -- "${MYDIR}" >/dev/null
 cd ..
 cd ..
 
-## Overridable from the environment; the test below is what handles it being
-## absent, so it must not abort before reaching it.
 GENMKFILE_PATH="${GENMKFILE_PATH:-}"
 
 if [ "${GENMKFILE_PATH}" = "" ] ; then
@@ -33,10 +31,6 @@ if [ "${GENMKFILE_PATH}" = "" ] ; then
       GENMKFILE_PATH="/usr/share/genmkfile"
    else
       printf '%s\n' "$0: ERROR: Auto detection of GENMKFILE_PATH failed!" >&2
-      ## Stop here. Previously this printed and CARRIED ON, so 'realpath ""'
-      ## failed, the makefile-full check ran against an empty path, and
-      ## make-helper.bsh was finally invoked with nothing -- a cascade of
-      ## follow-on errors after the real one had already been reported.
       exit 1
    fi
 fi
@@ -45,18 +39,8 @@ GENMKFILE_PATH="$(realpath -- "${GENMKFILE_PATH}")"
 export GENMKFILE_PATH
 
 if [ ! -r "${GENMKFILE_PATH}/makefile-full" ]; then
-   ## All of this block goes to STDERR. It is diagnostic output, and genmkfile's
-   ## stdout is consumed by callers -- a make wrapper reading it would otherwise
-   ## receive the error text and the 'ls' listing as if they were data. The
-   ## detection-failure branch above already used '>&2'; this block did not.
    printf '%s\n' "$0: ERROR: Folder '${GENMKFILE_PATH}' exists but file '${GENMKFILE_PATH}/makefile-full' does not readable!" >&2
    printf '%s\n' "$0: ERROR: Running 'ls -la ${GENMKFILE_PATH}' for debugging..." >&2
-   ## Best-effort: this 'ls' is a debugging aid INSIDE an already-reported
-   ## failure, and the very permission problem it exists to show is what makes
-   ## it fail. Under errexit an unlistable directory would abort right here --
-   ## swallowing the chmod remediation below, which is the one thing that
-   ## actually helps, and skipping the make-helper.bsh attempt that this branch
-   ## deliberately still makes (it warns, it does not stop).
    ls -la -- "${GENMKFILE_PATH}" >&2 || true
    printf '%s\n' "$0: ERROR: Permission denied error? Try running:" >&2
    printf '%s\n' "" >&2
