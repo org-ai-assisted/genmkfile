@@ -1018,8 +1018,9 @@ make_debinstfile_create() {
   local new_file filename_without_dot filename_without_hash \
     cleaned_filename_without_hash \
     pkg_name filename_hash_dir filename_hash_base \
-    temp_deb_install_file real_deb_install_file
-  local -a find_cmd
+    temp_deb_install_file real_deb_install_file \
+    file_name sorted_install_list
+  local -a find_cmd install_records
   local -A delete_yet
 
   ## Overwrite guards, enforced HERE (not only in the make_debinstfile wrapper) so a direct
@@ -1057,7 +1058,21 @@ make_debinstfile_create() {
     true "multi-package hash filename found: yes"
     find_cmd+=(-print0)
 
-    while IFS= read -r -d '' file_name; do
+    ## Capture the file list to a temp with an EXPLICIT rc check (pipefail in a subshell so a
+    ## find OR sort failure is caught), then read the loop from an in-memory array. A process
+    ## substitution '< <(find | sort)' hides the producer's exit status -- if find/sort dies
+    ## AFTER partial output the loop would accept the truncated list and report success with a
+    ## partial .install. Reading from the array also keeps the loop in THIS shell, so a fatal
+    ## exit_with_error on a bad package name stays fatal.
+    sorted_install_list="$(mktemp)" \
+      || exit_with_error 1 "mktemp failed while listing multi-package install files"
+    if ! ( set -o pipefail; "${find_cmd[@]}" | LC_ALL='C' sort -z ) > "${sorted_install_list}"; then
+      safe-rm --force -- "${sorted_install_list}"
+      exit_with_error 1 "listing/sorting multi-package install files failed"
+    fi
+    mapfile -d '' -t install_records < "${sorted_install_list}"
+    safe-rm --force -- "${sorted_install_list}"
+    for file_name in "${install_records[@]}"; do
       filename_without_dot="${file_name#./}"
       filename_hash_dir="${file_name%/*}"
       filename_hash_base="${file_name##*/}"
@@ -1090,7 +1105,7 @@ make_debinstfile_create() {
       fi
 
       printf "%s\n" "${filename_without_dot} => ${cleaned_filename_without_hash}" | sponge -a -- "${temp_deb_install_file}"
-    done < <("${find_cmd[@]}" | LC_ALL='C' sort -z)
+    done
 
     for new_file in "${genmkfile_temp_dir}"/*.install; do
       real_deb_install_file="debian/${new_file##*/}"
@@ -1735,22 +1750,22 @@ make_deb_cleanup() {
   make_function_run make_dh_clean
   make_function_run make_deb_clean
   for package in "${make_package_list[@]}"; do
-    ## "-" required in version globs. All Kicksecure and Whonix packages use
-    ## Debian's "quilt" packaging format, where a Debian revision is mandatory.
-    ## Any "native" format packages without a revision would therefore be
-    ## suspicious.
+    ## No '-' in the version globs. A Debian revision is optional, and the upstream
+    ## orig tarball is named from make_pkg_version WITHOUT the revision, so it never has
+    ## one: requiring a hyphen meant '<pkg>_1.0.orig.tar.xz' matched nothing, leaving every
+    ## orig tarball (and any native-format artifact) behind. Match on '_<version>' instead.
     for to_delete in \
-      "${DISTDIR}/${package}_"*-*_*".deb" \
-      "${DISTDIR}/${package}-dbgsym_"*-*_*".deb" \
-      "${DISTDIR}/${package}_"*-*_*".buildinfo" \
-      "${DISTDIR}/${package}_"*-*".debian.tar.xz" \
-      "${DISTDIR}/${package}_"*-*".orig.tar.xz" \
-      "${DISTDIR}/${package}_"*-*".dsc" \
-      "${DISTDIR}/${package}_"*-*_*".build" \
-      "${DISTDIR}/${package}_"*-*_*".changes" \
-      "${DISTDIR}/${package}_"*-*"_source.build" \
-      "${DISTDIR}/${package}_"*-*"_source.changes" \
-      "${DISTDIR}/${package}_"*-*"_source.${package}.upload"; do
+      "${DISTDIR}/${package}_"*_*".deb" \
+      "${DISTDIR}/${package}-dbgsym_"*_*".deb" \
+      "${DISTDIR}/${package}_"*_*".buildinfo" \
+      "${DISTDIR}/${package}_"*".debian.tar.xz" \
+      "${DISTDIR}/${package}_"*".orig.tar.xz" \
+      "${DISTDIR}/${package}_"*".dsc" \
+      "${DISTDIR}/${package}_"*_*".build" \
+      "${DISTDIR}/${package}_"*_*".changes" \
+      "${DISTDIR}/${package}_"*"_source.build" \
+      "${DISTDIR}/${package}_"*"_source.changes" \
+      "${DISTDIR}/${package}_"*"_source.${package}.upload"; do
       if test -e "${to_delete}"; then
         safe-rm -- "${to_delete}"
       fi
