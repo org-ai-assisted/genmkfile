@@ -15,6 +15,10 @@
 ##
 ## rsync and dctrl-tools are what 'install' and the binary-stanza walk shell out to;
 ## declared here rather than relied on as incidentally present in the runner image.
+##
+## bc computes the changelog revision bump in 'make_deb_chl_bumpup'
+## ('make_require debchange bc'); the chl_bumpup_revision suite drives that real
+## code and FATALs without it (debchange itself is stubbed in the test).
 dist-ai-tests:
-  apt-packages: "python3 safe-rm dpkg-dev debhelper moreutils rsync dctrl-tools"
+  apt-packages: "python3 safe-rm dpkg-dev debhelper moreutils rsync dctrl-tools bc"
   helper-scripts: true
