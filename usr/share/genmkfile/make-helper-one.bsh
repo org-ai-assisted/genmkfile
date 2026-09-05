@@ -336,13 +336,23 @@ make_parse_changelog_version() {
 ## make_debian_control_file_absolute_path from the caller.
 make_get_variables_parse_stanzas() {
   local package binary_package_architecture line skip_debs_artifact
-  local package_name_architecture temp
+  local package_name_architecture temp stanza_list
   package=""
   binary_package_architecture=""
   ## Neither 'Package' nor 'Architecture' is a folded or multiline field
   ## according to
   ## https://www.debian.org/doc/debian-policy/ch-controlfields.html,
   ## therefore no need to handle continuation lines for them.
+  ##
+  ## Capture grep-dctrl to a temp with an EXPLICIT rc check, then read from the file: a process
+  ## substitution '< <(grep-dctrl ...)' hides the producer's exit status, so a malformed control
+  ## would silently yield a partial stanza list and the build would proceed on wrong data.
+  make_require safe-rm
+  stanza_list="$(mktemp)" || exit_with_error 1 "mktemp failed while parsing debian/control"
+  if ! grep-dctrl --show-field=Package,Architecture '' "${make_debian_control_file_absolute_path}" > "${stanza_list}"; then
+    safe-rm --force -- "${stanza_list}"
+    exit_with_error 1 "parsing debian/control failed (grep-dctrl) -- malformed control?"
+  fi
   while IFS= read -r line; do
     case "${line}" in
       "Package: "*)
@@ -418,7 +428,8 @@ make_get_variables_parse_stanzas() {
         binary_package_architecture=""
       ;;
     esac
-  done < <(grep-dctrl --show-field=Package,Architecture '' "${make_debian_control_file_absolute_path}")
+  done < "${stanza_list}"
+  safe-rm --force -- "${stanza_list}"
 }
 
 make_get_variables() {
@@ -1927,18 +1938,24 @@ make_helper() {
         ## which risks breaking the system. This could be re-enabled if it set
         ## a flag indicating the issue, and only errored out after installation
         ## was finished.
-        #if [ -L "${source_fso}" ]; then
-        #  local source_fso_link_target destination_link_target
-        #  source_fso_link_target="$(readlink -- "${source_fso}")"
-        #  destination_link_target="$(readlink -- "${file_with_destdir}" 2>/dev/null || true)"
-        #  if [ "${source_fso_link_target}" != "${destination_link_target}" ]; then
-        #    exit_with_error 1 "symlink '${source_fso}' -> '${source_fso_link_target}' was not installed at '${file_with_destdir}'. Change it to a relative, in-tree symlink."
-        #  fi
-        #  ## We can't chmod the target of a dangling symlink.
-        #  if [ ! -e "${file_with_destdir}" ]; then
-        #    continue
-        #  fi
-        #fi
+        ## rsync --safe-links silently DROPS a symlink that points outside the copied tree
+        ## (absolute, or via '..'), so its destination is never installed. For a symlink source,
+        ## decide from the link TARGETS (a reinstall may leave a stale file/symlink masking the
+        ## drop): the dest must be a symlink with the identical target, else rsync dropped it ->
+        ## fail loud (a packaging bug), rather than let the 'stat' below crash on a missing dest.
+        if [ -L "${source_fso}" ]; then
+          local source_fso_link_target destination_link_target
+          source_fso_link_target="$(readlink -- "${source_fso}")"
+          destination_link_target="$(readlink -- "${file_with_destdir}" 2>/dev/null || true)"
+          if [ "${source_fso_link_target}" != "${destination_link_target}" ]; then
+            exit_with_error 1 "refusing to install: symlink '${source_fso}' -> '${source_fso_link_target}' was not installed at '${file_with_destdir}'. A symlink pointing outside the copied tree (absolute, or via '..') is skipped by 'rsync --safe-links' -- make it a relative in-tree symlink."
+          fi
+          ## A KEPT dangling in-tree symlink cannot be chmod'ed (chmod follows to the missing
+          ## target), so skip it rather than let the 'stat' below abort under errexit.
+          if [ ! -e "${file_with_destdir}" ]; then
+            continue
+          fi
+        fi
 
         ## Need to check first if it is a file...
         ## ...before checking if it is an executable.
