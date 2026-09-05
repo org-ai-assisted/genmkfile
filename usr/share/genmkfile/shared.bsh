@@ -3,10 +3,7 @@
 ## Copyright (C) 2012 - 2026 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
 ## See the file COPYING for copying conditions.
 
-## style-ok: no-strict
-## Sourced-only function library (make-helper.bsh and make-helper-one.bsh source
-## it); it must not set strict-mode, which would leak 'errexit'/'nounset'/
-## 'pipefail' into the sourcing shell.
+## style-ok: no-strict - sourced library.
 
 make_shared_function() {
    ## Detect debian/control. Set path variables to empty when the

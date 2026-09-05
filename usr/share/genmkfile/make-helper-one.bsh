@@ -74,19 +74,16 @@ make_output_error() {
 }
 
 exit_with_error() {
-  ## First arg is the exit code (every call site passes one); the rest is the message.
-  ## Without the shift it leaked into make_output_error as a spurious leading token
-  ## ("ERROR: 1 <msg>") and the code was ignored.
   local exit_code="$1"
   shift
   make_output_error "${@}"
-  ## A fatal error must never report SUCCESS: a non-numeric code, 0, or a value outside
-  ## 1..255 (which 'exit' would wrap mod 256, so 256 -> 0) falls back to 1.
   case "${exit_code}" in
-    '' | *[!0-9]* )
+    ''|*[!0-9]*)
       exit_code=1
       ;;
   esac
+  ## 0 is intentionally converted to 1 here since this function is only for
+  ## exiting on error conditions.
   if [ "${exit_code}" -lt 1 ] || [ "${exit_code}" -gt 255 ]; then
     exit_code=1
   fi
@@ -174,14 +171,11 @@ make_parse_cmd() {
       ;;
     esac
 
-    ## Targets map to 'make_<target with dashes -> underscores>'.
-    ## If no such function exists, fall through to the trailing
-    ## block which either defaults to make_all or tries to call
-    ## the argument as a function name directly.
+    ## Targets map to 'make_<target with dashes -> underscores>'. If no such
+    ## function exists, error out.
     target_fn="make_${arg//-/_}"
     if ! declare -F "${target_fn}" >/dev/null 2>&1; then
-      true "$0: positional parameter: $*"
-      break
+      exit_with_error 1 "unrecognized target '${arg}' (run 'genmkfile help' to see supported targets)"
     fi
 
     matched="true"
@@ -202,53 +196,34 @@ make_parse_cmd() {
     fi
   done
 
-  ## If there are input files (for example) that follow the options, they
-  ## will remain in the "$@" positional parameters.
-
-  if [ $# -eq 0 ] && [ "${matched}" != "true" ]; then
+  if ! [ "${matched}" = "true" ]; then
+    ## No targets were passed, fall back to make_all.
     make_function_run make_all
     return 0
-  fi
-
-  ## A valid target ran, then the loop broke on an argument that is NOT a target. It was
-  ## previously dropped SILENTLY -- 'genmkfile install deb-cleanuptypo' installed and reported
-  ## success while never running the misspelled target. Fail loud instead. (A run of purely
-  ## VALID targets leaves nothing here; 'all' consumes its trailing args itself.)
-  if [ "${matched}" = "true" ] && [ $# -gt 0 ]; then
-    exit_with_error 1 "unrecognized target '$1' (every argument must be a genmkfile target; run 'genmkfile help')"
-  fi
-
-  ## An unrecognized FIRST argument reached here (no valid target ran). Do NOT
-  ## fall through to running it -- make_function_run would exec it as a command,
-  ## so a mistyped target that happens to name a PATH binary ('genmkfile rm ...',
-  ## 'genmkfile id') would EXECUTE it. Fail loud, same as the 2nd-arg case above.
-  if ! [ "${matched}" = "true" ]; then
-    exit_with_error 1 "unrecognized target '$1' (every argument must be a genmkfile target; run 'genmkfile help')"
   fi
 }
 
 make_dependencies_filter_helper() {
   local temp
-  ## Read a Debian dependency expression on stdin, write a clean space-separated package name
-  ## list to stdout. Strips (all via sed, so the whole stream is covered, not a fixed list):
+  ## Read a Debian dependency expression on stdin, write a clean
+  ## space-separated package name list to stdout. Strips:
   ##   - commas (separator)
-  ##   - version constraints '(>= 1.0)'
-  ##   - architecture qualifiers '[linux-any]' / '[!linux-any]'
-  ##   - build-profile restrictions '<!nocheck>'
-  ##   - substitution markers '${shlibs:Depends}' and any other '${...}'
-  ## and reduces '|' to a SPACE (not empty, so a space-less 'A|B' tokenizes as two names).
-  ## NOTE: an 'A | B' alternative keeps BOTH names, not just the first. Reducing it to the
-  ## first alternative correctly needs a real Debian-dependency parser -- folding may occur
-  ## anywhere, alternatives carry per-arch and build-profile qualifiers, and grep-dctrl packs
-  ## multiple binary stanzas newline-separated -- so a bash reimplementation reliably regresses
-  ## one of those. Kept flat and simple on purpose (see the git skill's no-bash-parser rule).
+  ##   - version constraints like '(>= 1.0)'
+  ##   - architecture qualifiers like '[linux-any]' / '[!linux-any]'
+  ##   - build-profile restrictions like '<!nocheck>'
+  ##   - debhelper substitution markers (${shlibs:Depends} etc.)
+  ## Also reduces '|' to a space, without introducing unnecessary spaces.
+  ##
+  ## NOTE: an 'A | B' alternative keeps both names. Reducing it to the
+  ## first alternative correctly requires complex parsing that we don't need.
   temp="$(sed \
     -e 's/,/ /g' \
     -e 's/([^)]*)//g' \
     -e 's/\[[^]]*\]//g' \
     -e 's/<[^>]*>//g' \
     -e 's/\${[^}]*}//g' \
-    -e 's/|/ /g')"
+    -e 's/|/ /g'
+    -e 's/ \+/ /g')"
   printf "%s\n" "${temp}"
 }
 
@@ -304,36 +279,25 @@ make_get_dependencies() {
 ## 'all' is handled separately by the caller.
 make_architecture_covers_target() {
   local architecture_field="$1" target="$2" architecture_token
-  ## $architecture_field is a space-separated list of Debian arch names/wildcards that must
-  ## word-split. Match each with 'dpkg-architecture -i' (the target set as the host arch) rather
-  ## than a hand-rolled case: it is the only correct matcher for wildcards. A pure-bash test cannot
-  ## get 'any-<cpu>' right -- e.g. 'any-arm' matches armhf, whose CPU is 'arm' not 'armhf' -- so the
-  ## old code silently dropped a covered package's .deb from make_package_debs_files_list.
-  ## '-f' is REQUIRED: dpkg-architecture ignores '-a' when DEB_HOST_ARCH is already set in the
-  ## environment (a cross-build, or after a prior 'eval $(dpkg-architecture -s)'), so without it
-  ## the match reads the ENV arch, not ${target} -- dropping a covered .deb or inventing one.
+  ## $architecture_field is a space-separated list that must word-split.
   # shellcheck disable=SC2086
   for architecture_token in ${architecture_field}; do
-    if dpkg-architecture -f -a "${target}" -i "${architecture_token}" 2>/dev/null; then
-      return 0
-    fi
+    case "${architecture_token}" in
+      any | linux-any)
+        return 0
+        ;;
+      "${target}" | "linux-${target}")
+        return 0
+        ;;
+    esac
   done
   return 1
 }
 
 ## Split a Debian changelog version into epoch, upstream version and revision.
-## Sets: make_epoch, make_pkg_version, make_pkg_revision. The revision keeps its
-## leading hyphen because callers concatenate it straight into artifact names
-## ('..._${make_pkg_version}${make_pkg_revision}_...').
-##
-## The revision is the part after the LAST hyphen, per Debian policy: an upstream
-## version may itself contain hyphens. Splitting the revision on the FIRST hyphen
-## while the version strips at the last one made the two halves disagree, so
-## '1.0-beta-1' produced version '1.0-beta' plus revision '-beta-1' and every
-## derived name ('.dsc', '.orig.tar.xz', '.changes') came out as '1.0-beta-beta-1'.
-##
-## Separated from make_get_variables so it can be exercised directly; see
-## genmkfile-tests/test_version_parse.sh.
+## Sets make_epoch, make_pkg_version, and make_pkg_revision. The revision keeps
+## its leading hyphen because callers concatenate it straight into artifact
+## names ('..._${make_pkg_version}${make_pkg_revision}_...').
 make_parse_changelog_version() {
   local changelog_version="$1"
   local temp
@@ -351,85 +315,39 @@ make_parse_changelog_version() {
 
   ## Parse epoch (if present).
   if [[ "${changelog_version}" == *:* ]]; then
-    make_epoch="${temp%:*}"
+    make_epoch="${temp%%:*}"
   else
     make_epoch=""
   fi
 }
 
-## Walk every binary-package stanza in debian/control via grep-dctrl and, for the current
-## target architecture, append to the globals make_package_list (source name + every binary
-## package name) and make_package_debs_files_list (the .deb path each binary produces),
-## clearing all_package_debs_are_arch_all when any stanza builds architecture-dependent.
-## Reads make_source_package_name / make_pkg_version / make_pkg_revision / target_architecture /
-## DISTDIR / make_debian_control_file_absolute_path from the caller. A standalone function --
-## not an inline block -- so genmkfile-tests can source and drive it directly. NOT named 'make_*'
-## on purpose: make_parse_cmd dispatches 'make_<arg>', so a make_-prefixed helper would be callable
-## as a bogus CLI target and would double-append to the (already-populated) globals.
-parse_control_package_stanzas() {
-  local package binary_package_architecture current_field line skip_debs_artifact
-  local package_name_architecture continuation temp stanza_list
-  ## grep-dctrl exits non-zero and emits only the stanzas parsed SO FAR on a malformed control (a
-  ## line missing its colon after a valid stanza). A process substitution ('done < <(grep-dctrl)')
-  ## would swallow that exit status -- the loop would read the truncated output and the build would
-  ## SILENTLY drop the remaining binary packages. Capture to a temp (which preserves grep-dctrl's
-  ## trailing blank, so the last stanza still commits) with an explicit rc check; a bad control
-  ## aborts loud.
-  stanza_list="$(mktemp)" || exit_with_error 1 "mktemp failed while parsing debian/control"
-  if ! grep-dctrl --show-field=Package,Architecture '' "${make_debian_control_file_absolute_path}" > "${stanza_list}"; then
-    safe-rm --force -- "${stanza_list}"
-    exit_with_error 1 "parsing debian/control failed (grep-dctrl) -- malformed control?"
-  fi
+## Walk every binary package stanza in debian/control, appending package names
+## and built deb paths to make_package_list and make_package_debs_files_list
+## for packages that will be built for the current architecture. Clears
+## all_target_debs_are_arch_all if any stanza covered by
+## make_cross_build_platform_list is arch-dependent. Reads
+## make_source_package_name, make_pkg_version, make_pkg_revision,
+## make_cross_build_platform_list, target_architecture, DISTDIR, and
+## make_debian_control_file_absolute_path from the caller.
+make_get_variables_parse_stanzas() {
+  local package binary_package_architecture line skip_debs_artifact
+  local package_name_architecture continuation temp
   package=""
   binary_package_architecture=""
-  current_field=""
+  ## Neither 'Package' nor 'Architecture' is a folded or multiline field
+  ## according to
+  ## https://www.debian.org/doc/debian-policy/ch-controlfields.html,
+  ## therefore no need to handle continuation lines for them.
   while IFS= read -r line; do
     case "${line}" in
       "Package: "*)
         package="${line#Package: }"
-        current_field="package"
         ;;
-      "Architecture:"*)
-        ## No required space after the colon: a BARE 'Architecture:' whose value is entirely on
-        ## a continuation line must still set current_field, or the value is never associated.
-        ## The leading blank ('Architecture: all') is stripped by the read-normalisation below.
-        binary_package_architecture="${line#Architecture:}"
-        current_field="architecture"
+      "Architecture: "*)
+        binary_package_architecture="${line#Architecture: }"
         ;;
       "")
-        ## Normalise 'package' BEFORE the emptiness guard, then re-check on the normalised value.
-        ## A folded 'Package:\n mypkg' arrives as ' mypkg'; grep-dctrl also emits a blank-only
-        ## 'Package:' field as whitespace. Left unstripped the leading blank corrupts the
-        ## make_package_list entry (reprepro remove/removesrc, deb-cleanup) and the expected .deb
-        ## name; and a blank-only value MUST be treated as absent, not committed as an empty name
-        ## -- an empty name makes deb-clean/deb-cleanup act on 'debian/' itself (test -d is true).
-        read -r package <<<"${package}"
-        if [ -z "${package}" ]; then
-          ## Skip a stanza with no / blank-only Package:, but RESET the accumulator first: a bare
-          ## 'continue' would keep this stanza's Architecture/field state and leak it into the
-          ## NEXT stanza (which would then read a wrong architecture).
-          binary_package_architecture=""
-          current_field=""
-          continue
-        fi
-        ## Validate the control-derived binary package name before it is interpolated into
-        ## deletion paths (make_deb_clean: safe-rm --recursive -- "debian/${package}";
-        ## make_deb_cleanup: DISTDIR globs). Mirror the multi-package '#pkgname' guard exactly:
-        ## reject a name containing '/' or starting with '.', fail closed -- those are the only
-        ## forms that let "debian/${package}" escape the tree ('/' -> '../' or an absolute path;
-        ## a leading '.' -> a bare '..'). An interior '.' is a valid Debian name and is allowed.
-        ## genmkfile parses FIRST-PARTY debian/control (our own packages), so this is
-        ## defence-in-depth against an accidental/malformed value, not a patched active vuln.
-        case "${package}" in
-          *'/'* | '.'*)
-            exit_with_error 1 "invalid binary package name '${package}' in debian/control (must not contain '/' or start with '.')"
-            ;;
-        esac
-        ## Normalise the (possibly folded) architecture value: strip leading/trailing blanks so
-        ## a value that arrived only on a continuation line ('Architecture:\n all') still matches
-        ## the exact '= all' test below; interior blanks are fine (that test aside, the value is
-        ## word-split by make_architecture_covers_target).
-        read -r binary_package_architecture <<<"${binary_package_architecture}"
+        [ -n "${package}" ] || continue
         true "package: ${package}"
         true "make_pkg_version: ${make_pkg_version}"
         true "make_pkg_revision: ${make_pkg_revision}"
@@ -453,7 +371,7 @@ parse_control_package_stanzas() {
           package_name_architecture="all"
         elif make_architecture_covers_target "${binary_package_architecture}" "${target_architecture}"; then
           package_name_architecture="${target_architecture}"
-          all_package_debs_are_arch_all="false"
+          all_target_debs_are_arch_all="false"
         else
           ## dpkg-buildpackage produces no .deb for this stanza on this target,
           ## so do not record an expected artifact for it. Still add the binary
@@ -461,14 +379,11 @@ parse_control_package_stanzas() {
           ## it (reprepro remove/removesrc, deb-cleanup) continue to handle any
           ## stale copy -- reprepro remove/removesrc of an absent package is a
           ## no-op (exit 0), so this is safe.
-          ##
-          ## Leave all_package_debs_are_arch_all unchanged: an excluded stanza
-          ## produces no architecture-dependent artifact for this target, so it
-          ## must not force the per-architecture secondary build that the flag
-          ## gates below. Only a stanza actually built as architecture-dependent
-          ## (the 'elif' above) clears the flag.
           true "INFO: not expecting a .deb for binary package '${package}': Architecture '${binary_package_architecture}' does not cover target architecture '${target_architecture}'."
           skip_debs_artifact="true"
+          if [[ " ${make_cross_build_platform_list} " = *" ${binary_package_architecture} "* ]]; then
+            all_target_debs_are_arch_all="false"
+          fi
         fi
         if [ "${skip_debs_artifact}" = "false" ]; then
           ## Example architecture independent "all" package:
@@ -476,31 +391,15 @@ parse_control_package_stanzas() {
           temp="${DISTDIR}/${package}_${make_pkg_version}${make_pkg_revision}_${package_name_architecture}.deb"
           make_package_debs_files_list+=("${temp}")
         fi
+        ## The caller adds the source package name to make_package_list.
         if [ "${package}" != "${make_source_package_name}" ]; then
           make_package_list+=("${package}")
         fi
         package=""
         binary_package_architecture=""
-        current_field=""
-      ;;
-      [[:blank:]]*)
-        ## RFC822 folded continuation line (leading whitespace): append its value to the
-        ## field the preceding header line started. Without this a multi-line 'Architecture:'
-        ## silently loses every architecture after the first, so a covered target reads as
-        ## uncovered and its expected .deb is dropped from make_package_debs_files_list.
-        continuation="${line#"${line%%[![:blank:]]*}"}"
-        case "${current_field}" in
-          package)
-            package="${package} ${continuation}"
-            ;;
-          architecture)
-            binary_package_architecture="${binary_package_architecture} ${continuation}"
-            ;;
-        esac
       ;;
     esac
-  done < "${stanza_list}"
-  safe-rm --force -- "${stanza_list}"
+  done < <(grep-dctrl --show-field=Package,Architecture '' "${make_debian_control_file_absolute_path}")
 }
 
 make_get_variables() {
@@ -638,11 +537,8 @@ make_get_variables() {
   make_debian_non_package_specific_install_file_relative_path="debian/install"
   make_debian_install_file_relative_path="debian/${make_source_package_name}.install"
 
-  ## Parse every binary-package stanza in debian/control (Package/Architecture, RFC822
-  ## folding) into make_package_list + make_package_debs_files_list. A standalone function
-  ## so the parser can be sourced and driven directly by genmkfile-tests.
-  all_package_debs_are_arch_all="true"
-  parse_control_package_stanzas
+  all_target_debs_are_arch_all="true"
+  make_get_variables_parse_stanzas
 
   true "make_package_list: ${make_package_list[*]}"
   true "make_package_debs_files_list: ${make_package_debs_files_list[*]}"
@@ -698,13 +594,12 @@ make_get_distdir() {
     DISTDIR=".."
   fi
 
-  ## The cowbuilder dist folder only matters for a target that actually BUILDS
-  ## or places dist artifacts. A non-dist action (git-*, help, deb-*-dep) sets
-  ## make_enforce_cowbuilder_distdir=false so it is not forced to configure
-  ## cowbuilder output it never writes -- DISTDIR just keeps its "../" default.
-  ## Default true, so any other caller keeps the strict behaviour.
-  if [ "${make_enforce_cowbuilder_distdir:-true}" = "true" ] \
-     && [ "${make_use_cowbuilder:-}" = "true" ]; then
+  ## No override for requiring make_cowbuilder_dist_folder. Anything that needs
+  ## DISTDIR set will need this dir to exist when make_use_cowbuilder is
+  ## enabled, so adding an override could introduce subtle bugs in the future
+  ## even if there are no bugs today. Do not add the
+  ## make_cowbuilder_dist_folder override back for any reason.
+  if [ "${make_use_cowbuilder:-}" = "true" ]; then
     if [ -z "${make_cowbuilder_dist_folder:-}" ]; then
       exit_with_error 1 "make_use_cowbuilder=${make_use_cowbuilder}, so environment variable make_cowbuilder_dist_folder needs to be set! For example:
 make_use_cowbuilder=${make_use_cowbuilder} make_cowbuilder_dist_folder=~/genmkfile-packages-result"
@@ -717,17 +612,11 @@ mkdir -p -- ${make_cowbuilder_dist_folder}"
     fi
   fi
 
-  ## Only a dist-writing target (enforce) needs DISTDIR to exist + be writable.
-  ## A non-dist action (git-tag-* / git-verify, deb-*-dep) uses DISTDIR only as a
-  ## path prefix inside make_get_variables and never writes there, so a read-only
-  ## package parent ('../') must not abort it.
-  if [ "${make_enforce_cowbuilder_distdir:-true}" = "true" ]; then
-    if ! test -d "${DISTDIR}"; then
-      exit_with_error 1 "DISTDIR '${DISTDIR}' does not exist!"
-    fi
-    if ! test -w "${DISTDIR}"; then
-      exit_with_error 1 "DISTDIR '${DISTDIR}' is not writeable!"
-    fi
+  if ! test -d "${DISTDIR}"; then
+    exit_with_error 1 "DISTDIR '${DISTDIR}' does not exist!"
+  fi
+  if ! test -w "${DISTDIR}"; then
+    exit_with_error 1 "DISTDIR '${DISTDIR}' is not writeable!"
   fi
 }
 
@@ -898,13 +787,8 @@ genmkfile git-tag-push
    out on a missing branch or remote.
 
 genmkfile git-push
-   Atomic push of branches (NO tags) to each listed remote, in
-   parallel. Unsigned: unlike git-tag-push it requires no tag at the
-   branch tip, so it is the path for dev/backup pushes. A remote whose
-   LOCAL tracking ref already equals the tip is skipped with NO network
-   call, so re-running (or a many-repo push loop like
-   dm-packaging-helper-script) never hammers remotes into a rate-limit ban.
-   Default: current branch -> 'origin'.
+   Atomic push of branches to each listed remote, in parallel, without
+   pushing tags.
    Environment variables:
      make_git_push_branches       space-separated branch list (unset -> current branch)
      make_git_push_remotes        space-separated remote list (unset -> origin)
@@ -980,8 +864,7 @@ find \
       -not -path '*/\.git/*' \
       -not -path '*/\.git' \
       -not -name '.gitignore' \
-      -not -path './debian' \
-      -not -path './debian/*' \
+      -not -path './debian*' \
       -print0 \
          | tar \
             --null \
@@ -1005,8 +888,7 @@ find \
     -not -path '*/\.git/*' \
     -not -path '*/\.git' \
     -not -name '.gitignore' \
-    -not -path './debian' \
-    -not -path './debian/*' \
+    -not -path './debian*' \
     -print0 |
     tar \
       --null \
@@ -1098,46 +980,29 @@ make_undebdist() {
 }
 
 make_debinstfile() {
-  ## Public target. The overwrite guards (an upstream debian/install; a hand-written
-  ## debian/<pkg>.install carrying the 'nogenmkfile' opt-out) live in make_debinstfile_create,
-  ## so a direct 'genmkfile debinstfile-create' cannot bypass them either.
-  make_debinstfile_create
-}
+  ## calamares-settings-debian comes with debian/install by upstream default.
+  ## If file debian/calamares-settings-debian.install was created, that would result in debian/install
+  ## being ignored and in an empty package. Therefore, if debian/install already exists, do not
+  ## automatically create a debian/package-name.install file.
+  if test -f "${make_debian_non_package_specific_install_file_relative_path}"; then
+    return 0
+  fi
 
-make_debinstfile_has_nogenmkfile_marker() {
-  ## True if the install file carries the 'nogenmkfile' opt-out marker: a line whose sole
-  ## meaningful content is 'nogenmkfile' -- a bare marker line, or a comment ('## nogenmkfile').
-  ## A GENERATED entry is always a 'SOURCE => DEST' mapping (more than the bare token), so it
-  ## never matches -- a path or a '#'-prefixed mapping that merely contains the substring (e.g.
-  ## 'usr/bin/nogenmkfile', '#nogenmkfile#pkg => ...') does NOT trip the opt-out and freeze
-  ## future updates.
-  grep --quiet --extended-regexp -- '^[[:space:]]*#*[[:space:]]*nogenmkfile[[:space:]]*$' "$1"
+  if test -f "${make_debian_install_file_relative_path}"; then
+    if grep --quiet -- "nogenmkfile" "${make_debian_install_file_relative_path}"; then
+      return 0
+    fi
+  fi
+
+  make_debinstfile_create
 }
 
 make_debinstfile_create() {
   local new_file filename_without_dot filename_without_hash \
-    cleaned_filename_without_hash pkg_name \
-    filename_hash_dir filename_hash_base \
-    temp_deb_install_file real_deb_install_file \
-    file_name sorted_install_list
-  local -a find_cmd install_records
+    pkg_name filename_hash_dir filename_hash_base \
+    temp_deb_install_file real_deb_install_file
+  local -a find_cmd
   local -A delete_yet
-
-  ## Overwrite guards, enforced HERE (not only in the make_debinstfile wrapper) so a direct
-  ## 'genmkfile debinstfile-create' cannot clobber a maintainer-provided install file:
-  ##  - an upstream debian/install (e.g. calamares-settings-debian) -- generating per-package
-  ##    files alongside it makes dh ignore it and ship an EMPTY package;
-  ##  - a 'nogenmkfile' marker in debian/<source>.install is a GLOBAL opt-out: it stops the
-  ##    whole generation deliberately (a maintainer opting the package out entirely). A marker
-  ##    in a NON-source binary package's debian/<binpkg>.install is a per-file opt-out, handled
-  ##    in the multi-package loop below -- it preserves only that file, others still generate.
-  if test -f "${make_debian_non_package_specific_install_file_relative_path:-}"; then
-    return 0
-  fi
-  if test -f "${make_debian_install_file_relative_path:-}" \
-     && make_debinstfile_has_nogenmkfile_marker "${make_debian_install_file_relative_path}"; then
-    return 0
-  fi
 
   make_require safe-rm sponge
 
@@ -1146,64 +1011,32 @@ make_debinstfile_create() {
   find_cmd+=(-not -path '*/\.git/*')
   find_cmd+=(-not -path '*/\.git')
   find_cmd+=(-not -name '.gitignore')
-  ## Exclude only the packaging dir './debian' and its contents -- NOT sibling top-level names
-  ## that merely start with 'debian' (e.g. 'debian-notes/', 'debianrc'). A bare './debian*' glob
-  ## swallowed those, silently dropping their files/packages.
-  find_cmd+=(-not -path './debian')
-  find_cmd+=(-not -path './debian/*')
+  find_cmd+=(-not -path './debian*')
   find_cmd+=(-iname '*#*')
-  ## Files/symlinks only: a '#'-named DIRECTORY must not be emitted as an install
-  ## entry (the '#' is the package delimiter, so such a dir is never a real target).
   find_cmd+=('(' -type f -o -type l ')')
 
   if "${find_cmd[@]}" | grep --fixed-strings -- '#' >/dev/null; then
     true "multi-package hash filename found: yes"
     find_cmd+=(-print0)
 
-    ## Capture the file list to a temp with an EXPLICIT rc check (pipefail in a subshell so a
-    ## find OR sort failure is caught), then read the loop from an in-memory array. Neither a
-    ## pipe nor process substitution ('< <(find | sort)') exposes the producer's exit status --
-    ## if find/sort dies AFTER partial output, the loop would accept the truncated list and the
-    ## build would report success with a partial .install. Reading from the array (not a pipe)
-    ## also keeps the loop in THIS shell, so exit_with_error on a bad package name stays fatal.
-    sorted_install_list="$(mktemp)" \
-      || exit_with_error 1 "mktemp failed while listing multi-package install files"
-    if ! ( set -o pipefail; "${find_cmd[@]}" | LC_ALL='C' sort -z ) > "${sorted_install_list}"; then
-      safe-rm --force -- "${sorted_install_list}"
-      exit_with_error 1 "listing/sorting multi-package install files failed"
-    fi
-    mapfile -d '' -t install_records < "${sorted_install_list}"
-    safe-rm --force -- "${sorted_install_list}"
-    for file_name in "${install_records[@]}"; do
-        filename_without_dot="${file_name#./}"
-        ## Strip the '#<pkgname>' delimiter from the BASENAME only -- same basis as
-        ## pkg_name below (after the basename's LAST '#'). Deriving the dest from the
-        ## whole path ('${file_name%%#*}') truncated it at a '#' in a PARENT directory:
-        ## 'us#r/bin/foo#pkg' yielded dest '/us' instead of '/us#r/bin/foo'.
-        filename_hash_dir="${file_name%/*}"
-        filename_hash_base="${file_name##*/}"
-        filename_without_hash="${filename_hash_dir}/${filename_hash_base%#*}"
-        cleaned_filename_without_hash="${filename_without_hash/#.\//\/}"
-        ## The package name is the BASENAME's part after its last '#'. Deriving it from the
-        ## whole path ('${file_name#*#}') let a PARENT directory containing '#..' inject '../'
-        ## into temp_deb_install_file below -- an arbitrary-file write/delete OUTSIDE
-        ## genmkfile_temp_dir (verified: a source tree with 'x#../pwned#pkg' escaped the temp
-        ## dir as root). A basename cannot contain '/', and the value is validated besides.
-        pkg_name="${file_name##*/}"
-        pkg_name="${pkg_name##*#}"
-        ## A leading dot is rejected too: a Debian package name cannot start with '.', and a
-        ## '.pkg.install' would be silently skipped by the later '*.install' glob (dotglob off).
-        case "${pkg_name}" in
-          '' | *'/'* | '.'*)
-            exit_with_error 1 "invalid package name '${pkg_name}' from multi-package filename '${file_name}' (expected '<path>#<pkgname>')"
-            ;;
-        esac
-        temp_deb_install_file="${genmkfile_temp_dir}/${pkg_name}.install"
+    while IFS= read -r -d '' file_name; do
+      filename_without_dot="${file_name#./}"
+      filename_hash_dir="${file_name%/*}"
+      filename_hash_base="${file_name##*/}"
+      filename_without_hash="${filename_hash_dir}/${filename_hash_base%#*}"
+      pkg_name="${file_name##*/}"
+      pkg_name="${pkg_name##*#}"
+      case "${pkg_name}" in
+        '' | *'/'* | '.'*)
+          exit_with_error 1 "invalid package name '${pkg_name}' from multi-package filename '${file_name}' (expected '<path>#<pkgname>')"
+          ;;
+      esac
+      temp_deb_install_file="${genmkfile_temp_dir}/${pkg_name}.install"
 
-        if [ -z "${delete_yet[${pkg_name}]:-}" ]; then
-          safe-rm --force -- "${temp_deb_install_file}"
-          delete_yet["${pkg_name}"]=true
-          printf "%s\n" "\
+      if [ -z "${delete_yet[${pkg_name}]:-}" ]; then
+        safe-rm --force -- "${temp_deb_install_file}"
+        delete_yet["${pkg_name}"]=true
+        printf "%s\n" "\
 #!/usr/bin/dh-exec
 
 ## Copyright (C) 2020 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
@@ -1211,23 +1044,15 @@ make_debinstfile_create() {
 
 ## This file was generated using 'genmkfile debinstfile'.
 " | sponge -a -- "${temp_deb_install_file}"
-          chmod -- +x "${temp_deb_install_file}"
-        fi
+        chmod -- +x "${temp_deb_install_file}"
+      fi
 
-        printf "%s\n" "${filename_without_dot} => ${cleaned_filename_without_hash}" | sponge -a -- "${temp_deb_install_file}"
-    done
+      printf "%s\n" "${filename_without_dot} => ${filename_without_hash}" | sponge -a -- "${temp_deb_install_file}"
+    done < <("${find_cmd[@]}" | LC_ALL='C' sort -z)
 
     for new_file in "${genmkfile_temp_dir}"/*.install; do
       real_deb_install_file="debian/${new_file##*/}"
       if test -f "${real_deb_install_file}"; then
-        ## Per-target 'nogenmkfile' opt-out, same intent as the single-source-package
-        ## guard above: a hand-maintained debian/<binary-pkg>.install carrying the marker
-        ## is never overwritten. Without this, the multi-package loop clobbers EVERY
-        ## differing binary-package install file, so a maintainer's hand-written content
-        ## in a binary-package .install is silently lost.
-        if make_debinstfile_has_nogenmkfile_marker "${real_deb_install_file}"; then
-          continue
-        fi
         if cmp -s -- "${new_file}" "${real_deb_install_file}"; then
           continue
         fi
@@ -1333,9 +1158,8 @@ make_deb_shared_dep() {
   make_output_info "running: ${msg}"
 
   apt_get_exit_code="0"
-  ## style-ok: allow-downgrades -- installing build-deps may need a downgrade to
-  ## the pinned/frozen version (here and at the second apt-get); deliberate, not
-  ## the vulnerability-introducing use R-212 targets.
+  ## style-ok: allow-downgrades - installing build-deps may need a downgrade to
+  ## the pinned/frozen version.
   ## $make_deb_shared_dependencies is intentionally unquoted: the
   ## extractor produces a space-separated package list and apt-get
   ## expects one argument per package.
@@ -1390,15 +1214,9 @@ make_deb_pkg_build_shared() {
   local cow_folder base_folder package
   local -a make_cowbuilder_config_file_arg=()
 
-  ## See if we even need to do a build. Architecture-independent ('all')
-  ## binaries are produced once, while targeting ${first_arch}; a secondary
-  ## architecture only needs a build when this package emits at least one
-  ## architecture-dependent binary. all_package_debs_are_arch_all is 'true'
-  ## only when EVERY built binary is arch-all, so skip exactly that case on a
-  ## non-first architecture. Skipping when the flag is 'false' would instead
-  ## drop the architecture-dependent .deb for every secondary architecture.
-  # shellcheck disable=SC2154  # first_arch is exported by the make-helper.bsh entrypoint
-  if [ "${all_package_debs_are_arch_all}" = 'true' ] \
+  ## See if we even need to do a build.
+  # shellcheck disable=SC2154 ## first_arch is exported by make-helper.bsh
+  if [ "${all_target_debs_are_arch_all}" = 'true' ] \
     && ! [ "${target_architecture}" = "${first_arch}" ]; then
     make_output_info "Skipping build because all binaries built by this package are arch-all and they have already been built."
     return 0
@@ -1461,10 +1279,6 @@ beforehand?"
     cow_folder="${cowbuilder_cache_dir}/cow.cow_${target_architecture}${make_cow_suffix:-}"
     base_folder="${cowbuilder_cache_dir}/base.cow_${target_architecture}"
 
-    ## Guard on readability, not just non-empty: a caller may point this at the dm-generated
-    ## '~/derivative-binary/pbuilder.conf', which exists only AFTER a dm build has run. Skip
-    ## '--configfile' when the file is absent rather than pass a path pbuilder aborts on
-    ## sourcing -- so a standalone build needs no always-present wrapper configfile.
     if [ -n "${dist_build_pbuilder_config_file:-}" ] && [ -r "${dist_build_pbuilder_config_file}" ]; then
       make_cowbuilder_config_file_arg=(--configfile "${dist_build_pbuilder_config_file}")
     fi
@@ -1527,12 +1341,9 @@ beforehand?"
     ## has been package revision number 1 including upstream source tarball
     ## uploaded beforehand. Good enough.
     ##
-    ## The temp-dir variables are cleared on the invocation below rather than left to
-    ## the caller: pbuilder passes them into the chroot, where a host-only path does
-    ## not exist. Cleared, not set to some other directory -- a private per-build temp
-    ## dir is the same bug, since that path does not exist in the chroot either.
-    ## Setting TMPDIR to a path absent from the chroot breaks pbuilder (which gets
-    ## called by cowbuilder).
+    ## All TMPDIR variables are unset, as the host's TMPDIR will likely not
+    ## exist in the chroot and would break pbuilder if passed through.
+    ##
     ## Installing libpam-tmpdir (security-feature) results in these variables being set.
     ## In other words:
     ## "`sudo apt install libpam-tmpdir` breaks cowbuilder"
@@ -1570,8 +1381,6 @@ beforehand?"
     fi
 
     # shellcheck disable=SC2086
-    ## After 'sudo', not before: sudo's env_reset discards anything set on the calling
-    ## side, so clearing these earlier would silently do nothing.
     make_log_and_run \
       sudo \
       env --unset=TMPDIR --unset=TMP --unset=TEMPDIR --unset=TEMP \
@@ -1591,20 +1400,8 @@ beforehand?"
       --buildresult "${build_result_dir}"
 
     if ! [ "${target_architecture}" = "${first_arch}" ]; then
-      ## Drop the arch-all .debs a secondary build re-emitted; the copies kept
-      ## while targeting ${first_arch} are authoritative. nullglob is not set
-      ## here, so an unmatched glob would pass the literal pattern to safe-rm and
-      ## abort the build under errexit -- a pure 'Architecture: any' package
-      ## legitimately produces no '*_all.deb'. Collect real matches only.
-      local arch_all_deb
-      local -a arch_all_debs=()
-      for arch_all_deb in "${build_result_dir}"/*_all.deb; do
-        [ -e "${arch_all_deb}" ] || continue
-        arch_all_debs+=( "${arch_all_deb}" )
-      done
-      if [ "${#arch_all_debs[@]}" -gt 0 ]; then
-        safe-rm -- "${arch_all_debs[@]}"
-      fi
+      ## Drop the arch-all .debs a secondary build re-emitted.
+      safe-rm --force -- "${build_result_dir}"/*_all.deb
     fi
     mv -- "${build_result_dir}"/* "${DISTDIR}/"
     safe-rm --recursive --force -- "${build_result_dir}"
@@ -1695,13 +1492,7 @@ make_lintian_on_warning() {
     make_output_warn "lintian warning. make_lintian_fail_open_versus_closed=open - failing open."
     return 0
   fi
-  make_output_error "\
-lintian produced the output above and genmkfile fails closed on ANY of it. The default lintian
-opts add --info/--display-info/--pedantic, so even a purely INFORMATIONAL ('N:') note aborts the
-build here, not only a warning or error. To proceed, pick one:
-  - fix the reported finding(s); or
-  - build with 'make_lintian_fail_open_versus_closed=open' to WARN instead of fail; or
-  - build with 'make_use_lintian=false' to skip lintian entirely."
+  make_output_error "lintian warning. make_lintian_fail_open_versus_closed is not set to 'open' - failing closed."
   ## lintian may exit 0 while still emitting output; treat any output as a failure signal.
   [ "${lintian_exit_code}" = "0" ] && lintian_exit_code=1
   exit "${lintian_exit_code}"
@@ -1722,9 +1513,7 @@ make_lintian() {
     ## Removed '--suppress-tags package-supports-alternative-init-but-no-init.d-script' for Trixie, tag no longer exists.
     ##
     ## lintian's matcher only recognizes 'set -e' (and shebang '-e'), not the
-    ## POSIX-equivalent 'set -o errexit' that our bash style (R-010) mandates,
-    ## so any maintainer script using the strict preamble falsely trips
-    ## 'maintainer-script-ignores-errors'. Suppress it globally.
+    ## POSIX-equivalent 'set -o errexit' that we use.
     ## --suppress-tags maintainer-script-ignores-errors
     export DEBUILD_LINTIAN_OPTS="\
          --suppress-tags missing-tests-control \
@@ -1865,38 +1654,16 @@ make_deb_clean() {
   done
 }
 
-## Python tooling (mypy, pytest, hypothesis) writes its caches into the
-## directory it runs in, which for in-tree linting is the packaged source
-## tree. Packaging copies the WORKING TREE, not git's view, so a directory
-## that is already in .gitignore still ends up inside the .deb; lintian then
-## fails the build closed on package-contains-python-dot-directory. Strip it
-## here, since deb-cleanup runs before the tree is packaged.
-## Each removal is logged: a silent sweep is indistinguishable from one that
-## removed the wrong thing.
-## No 'while read ... < <(find ...)': process substitution runs find in a
-## subshell whose exit status is invisible, so under errexit a broken find
-## would strip nothing and the build would continue looking clean. Running
-## find in the foreground keeps its failure fatal.
-## '-prune' on a match stops find descending into a directory it is about to
-## delete, so nested residue cannot produce stale entries.
+## Some Python tooling writes caches into package directories. Remove these
+## caches so they don't end up in binary packages.
 make_strip_build_residue() {
   make_require safe-rm find
-  ## Refuse to sweep a tree that is not a package source root. The rest of this
-  ## file also assumes PWD is the package root, but those functions delete a
-  ## handful of specifically named artifacts; this one deletes RECURSIVELY, so
-  ## running it from the wrong directory would remove every __pycache__ beneath
-  ## it. Skip rather than abort: an unexpected context must not break a build,
-  ## and the message says why nothing was stripped.
+  ## Refuse to sweep a tree that is not a package source root.
   if ! test -d "${PWD}/debian"; then
     make_output_info "no 'debian' directory in '${PWD}' - not a package source root, skipping build residue strip."
     return 0
   fi
   make_output_info "stripping build residue (removed paths listed below, if any)"
-  ## -mindepth 1: never match "${PWD}" itself, so a package root that happens to BE named
-  ## e.g. '__pycache__' is not handed to 'safe-rm -r' and wiped (the debian/ guard above
-  ## does not exclude that case). The second alternative also takes a stray '.pyc'/'.pyo'
-  ## (including a SYMLINK named so -- Python follows it) that lives OUTSIDE any cache dir,
-  ## which the directory sweep alone would leave behind to mask edited source.
   find "${PWD}" \
     -mindepth 1 \
     -name ".git" -prune -o \
@@ -1919,28 +1686,22 @@ make_deb_cleanup() {
   make_function_run make_dh_clean
   make_function_run make_deb_clean
   for package in "${make_package_list[@]}"; do
-    ## No '-' in the version globs. A Debian revision is optional, and the upstream
-    ## tarball is named from make_pkg_version WITHOUT the revision, so it never has
-    ## one: requiring a hyphen meant '<pkg>_1.0.orig.tar.xz' matched nothing and every
-    ## PREVIOUS version's tarball accumulated in DISTDIR -- the current one was removed
-    ## only by the exact-path fallback below, which is what hid it. Revision-less
-    ## versions ('<pkg>_2.0_all.deb') were likewise never swept, leaving a stale binary
-    ## for a later build to publish or install.
-    ##
-    ## The leading '<pkg>_' still anchors each pattern, so a sibling package is
-    ## untouched: '<pkg>-extra_1.0-1_all.deb' does not match '<pkg>_'*.
+    ## "-" required in version globs. All Kicksecure and Whonix packages use
+    ## Debian's "quilt" packaging format, where a Debian revision is mandatory.
+    ## Any "native" format packages without a revision would therefore be
+    ## suspicious.
     for to_delete in \
-      "${DISTDIR}/${package}_"*_*".deb" \
-      "${DISTDIR}/${package}-dbgsym_"*_*".deb" \
-      "${DISTDIR}/${package}_"*_*".buildinfo" \
-      "${DISTDIR}/${package}_"*".debian.tar.xz" \
-      "${DISTDIR}/${package}_"*".orig.tar.xz" \
-      "${DISTDIR}/${package}_"*".dsc" \
-      "${DISTDIR}/${package}_"*_*".build" \
-      "${DISTDIR}/${package}_"*_*".changes" \
-      "${DISTDIR}/${package}_"*"_source.build" \
-      "${DISTDIR}/${package}_"*"_source.changes" \
-      "${DISTDIR}/${package}_"*"_source.${package}.upload"; do
+      "${DISTDIR}/${package}_"*-*_*".deb" \
+      "${DISTDIR}/${package}-dbgsym_"*-*_*".deb" \
+      "${DISTDIR}/${package}_"*-*_*".buildinfo" \
+      "${DISTDIR}/${package}_"*-*".debian.tar.xz" \
+      "${DISTDIR}/${package}_"*-*".orig.tar.xz" \
+      "${DISTDIR}/${package}_"*-*".dsc" \
+      "${DISTDIR}/${package}_"*-*_*".build" \
+      "${DISTDIR}/${package}_"*-*_*".changes" \
+      "${DISTDIR}/${package}_"*-*"_source.build" \
+      "${DISTDIR}/${package}_"*-*"_source.changes" \
+      "${DISTDIR}/${package}_"*-*"_source.${package}.upload"; do
       if test -e "${to_delete}"; then
         safe-rm -- "${to_delete}"
       fi
@@ -1977,54 +1738,24 @@ in_array() {
   return 1
 }
 
-## True when <path> IS one of the remaining arguments, or lives underneath one of them.
-##
-## Used for 'folder_permission_skip_list': the question is "is this file inside a folder
-## whose permissions we leave alone", which is a path-prefix question, not a substring
-## one. 'array_match' answers the substring version, so a skip-list entry of '/usr/src'
-## also matched '/usr/share/doc/x/usr/src-notes' and that file silently kept whatever
-## mode it arrived with. Matching on the '/' boundary keeps the intended case
-## ('/usr/src/foo') and drops the accidental one.
-##
-## array_match itself is left alone: it is generic, and a package's
-## make-helper-overrides.bsh is sourced into this shell and may call it.
+## True when path "needle" is identical to or under one of the paths specified
+## after it.
 path_is_within_any() {
-  local needle="$1" item
-  shift
-  for item in "$@"; do
-    if [ "${needle}" = "${item}" ] || [[ "${needle}" == "${item}/"* ]]; then
-      return 0
-    fi
-  done
-  return 1
-}
-
-array_match() {
   local needle item
   needle="$1"
   shift
-  true "INFO: array_match: @: |$*|"
+  true "INFO: path_is_within_any: @: '$*'"
   for item in "$@"; do
     true "item: ${item}"
-    if [[ "${needle}" == *"${item}"* ]]; then
-      true "INFO: array_match: found"
+    if [ "${needle}" = "${item}" ] || [[ "${needle}" == "${item}/"* ]]; then
+      true "INFO: path_is_within_any: found"
       return 0
     fi
   done
-  true "INFO: array_match: not found"
+  true "INFO: path_is_within_any: not found"
   return 1
 }
 
-## True for an installed FILE at this path, including a dangling symlink, and false for
-## a directory.
-##
-## 'test -f' follows the link and is therefore FALSE when the target is gone, so an
-## uninstall keyed on it silently leaves the symlink behind and the following
-## uninstallcheck reports success -- a false green on both steps.
-##
-## '-L' rather than '-e' for the second arm: '-e' is also true for a DIRECTORY, and the
-## loop below hands each hit to safe-rm, which then fails with "Is a directory". The old
-## '-f' excluded directories, and that part was right.
 genmkfile_path_present() {
   [ -f "$1" ] || [ -L "$1" ]
 }
@@ -2073,11 +1804,7 @@ make_helper() {
   genmkfile_rsync_opts+=("--links")         ## copy symlinks as symlinks
   genmkfile_rsync_opts+=("--hard-links")    ## preserve hard links
   genmkfile_rsync_opts+=("--safe-links")    ## ignore symlinks that point outside the tree
-  ## Never install build residue. 'make install' does not run
-  ## make_strip_build_residue (only the 'deb' cleanup path does), so a source
-  ## tree that accumulated a bytecode/tooling cache -- e.g. a package that ships
-  ## '.py' with '-B' and never wants '.pyc' -- would otherwise get that cruft
-  ## rsync'd straight into the target. Exclude the same set the strip removes.
+  ## Never install build residue.
   genmkfile_rsync_opts+=("--exclude=__pycache__")
   genmkfile_rsync_opts+=("--exclude=*.pyc")
   genmkfile_rsync_opts+=("--exclude=*.pyo")
@@ -2128,35 +1855,26 @@ make_helper() {
           rsync_done=true
         fi
 
-        ## TODO: review
-        ## rsync (above) installed every source entry into DESTDIR EXCEPT
-        ## symlinks that 'rsync --safe-links' drops - those point outside the
-        ## copied tree (absolute, or via '..') and are silently NOT installed
-        ## (there are no --exclude filters, so safe-links is the only thing that
-        ## skips an entry). For a symlink source, decide from the link TARGETS,
-        ## not from destination existence/type: on a reinstall/upgrade DESTDIR
-        ## may already hold a stale file OR a stale symlink at this path, either
-        ## of which would mask a dropped symlink. rsync copies a KEPT symlink
-        ## verbatim, so the destination must be a symlink with the identical
-        ## target; anything else (absent, a non-symlink, or a differently-aimed
-        ## stale symlink) means rsync dropped this one -> fail loud, it is a
-        ## packaging bug. (A non-symlink source whose destination is somehow
-        ## missing falls through to 'stat' below and aborts under
-        ## 'set -o errexit' - also loud.)
-        if [ -L "${source_fso}" ]; then
-          local source_fso_link_target destination_link_target
-          source_fso_link_target="$(readlink -- "${source_fso}")"
-          destination_link_target="$(readlink -- "${file_with_destdir}" 2>/dev/null || true)"
-          if [ "${source_fso_link_target}" != "${destination_link_target}" ]; then
-            exit_with_error 1 "refusing to install: symlink '${source_fso}' -> '${source_fso_link_target}' was not installed at '${file_with_destdir}'. A symlink pointing outside the copied tree (absolute, or via '..') is skipped by 'rsync --safe-links' -- make it a relative in-tree symlink."
-          fi
-          ## Destination is the copied symlink (identical target). A dangling in-tree symlink
-          ## cannot be meaningfully chmod'ed (chmod follows to the missing target), so skip it
-          ## rather than let the 'stat' below abort under errexit.
-          if [ ! -e "${file_with_destdir}" ]; then
-            continue
-          fi
-        fi
+        ## Check for symlinks skipped by rsync --safe-links that either aren't
+        ## already present in the system, or where the system's copy points
+        ## somewhere other than where the package's copy points.
+        ##
+        ## Disabled. This would interrupt a package installation mid-install,
+        ## which risks breaking the system. This could be re-enabled if it set
+        ## a flag indicating the issue, and only errored out after installation
+        ## was finished.
+        #if [ -L "${source_fso}" ]; then
+        #  local source_fso_link_target destination_link_target
+        #  source_fso_link_target="$(readlink -- "${source_fso}")"
+        #  destination_link_target="$(readlink -- "${file_with_destdir}" 2>/dev/null || true)"
+        #  if [ "${source_fso_link_target}" != "${destination_link_target}" ]; then
+        #    exit_with_error 1 "symlink '${source_fso}' -> '${source_fso_link_target}' was not installed at '${file_with_destdir}'. Change it to a relative, in-tree symlink."
+        #  fi
+        #  ## We can't chmod the target of a dangling symlink.
+        #  if [ ! -e "${file_with_destdir}" ]; then
+        #    continue
+        #  fi
+        #fi
 
         ## Need to check first if it is a file...
         ## ...before checking if it is an executable.
@@ -2176,9 +1894,9 @@ make_helper() {
             fi
           fi
         elif test -f "${source_fso}"; then
-          true "calling...: path_is_within_any |${file_without_pwd}| |${folder_permission_skip_list[*]}|"
+          true "calling...: path_is_within_any '${file_without_pwd}' '${folder_permission_skip_list[*]}'"
           if ! path_is_within_any "${file_without_pwd}" "${folder_permission_skip_list[@]}"; then
-            true "array_match did not match, therefore continuing..."
+            true "path_is_within_any did not match, therefore continuing..."
             ## CI workaround for tree-mode regressions. Some upstream
             ## push paths (notably the GitHub Contents API used by
             ## github-mcp-server's push_files / create_or_update_file)
@@ -2338,22 +2056,10 @@ make_deb_chl_bumpup() {
       ## https://stackoverflow.com/a/4485581
       #new_upstream_version="$(printf "%s\n" "$make_pkg_version" | awk -F. '{$NF = $NF + 1;} 1' | sed 's/ /./g')"
       new_upstream_version="${make_pkg_version}"
-      ## make_pkg_revision carries its leading hyphen for artifact names, so it must
-      ## be stripped before arithmetic: 'scale=9 ; -1 + 1' is 0, which turned a major
-      ## bump of '1.0-1' into '1.0-0' -- a downgrade debchange rejects. Empty means a
-      ## version with no revision at all, which bumps to 1.
+      ## make_pkg_revision has a leading hyphen by design, strip it for
+      ## arithmetic.
       revision_number="${make_pkg_revision#-}"
       [ -n "${revision_number}" ] || revision_number=0
-      ## bc treats a non-numeric token as an undefined variable equal to 0 (exit 0, no error
-      ## text), so a non-integer revision -- e.g. '1.0-rc1' -> revision 'rc1' -- would SILENTLY
-      ## compute new_revision=1 and bump to '1.0-1', dropping 'rc1', and the '*error*' guard below
-      ## never fires. Require a plain integer and fail loud otherwise; the caller must fix
-      ## debian/changelog or bump manually.
-      case "${revision_number}" in
-        *[!0-9]*)
-          exit_with_error 1 "cannot compute a major bump: package revision '${make_pkg_revision}' is not a plain integer (bc would silently treat '${revision_number}' as 0 and drop it). Fix debian/changelog or use a manual bump."
-          ;;
-      esac
       new_revision="$(bc -l <<<"scale=9 ; ${revision_number} + 1" 2>&1)"
     else
       #new_upstream_version_without_epoch="$(bc -l <<< "scale=9 ; $make_pkg_version + 0.1" 2>&1)"
@@ -2420,7 +2126,6 @@ make_git_tag_shared() {
     fi
   fi
   [ -n "${make_git_push_remotes:-}" ] || make_git_push_remotes="origin"
-  make_require git
   make_git_tag_shared_done="true"
 }
 
@@ -2594,13 +2299,9 @@ git_tag_push_cache_write() {
   append-once "${cache_file}" "${remote_url}:${tag}:${sha}"
 }
 
-## Backgrounded (one per remote) by make_git_tag_push (branches + tags)
-## and make_git_push (branches only): 'exit_with_error' kills only the sub-shell;
-## parent's 'wait' aggregates per-remote failures. Args:
-## <remote> <branch>... [-- <tag>...]. With no '--'/tags it pushes only
-## the given branches. A branch already at the remote tip (per its LOCAL
-## tracking ref -- no network) is skipped, so a many-repo push loop (e.g.
-## dm-packaging-helper-script) never hammers up-to-date remotes into a ban.
+## Args: <remote> <branch>... [-- <tag>...]. With no '--'/tags it pushes only
+## the given branches. A branch already at the remote tip (per its tracking
+## ref) is skipped.
 git_push_to_remote() {
   local remote branch tag tag_sha local_sha tracking_ref arg sep_seen
   local -a branches tags tags_to_push refspecs
@@ -2633,16 +2334,6 @@ git_push_to_remote() {
     fi
   done
 
-  ## Skip a branch already at the remote tip using the LOCAL remote-tracking ref -- a pure local
-  ## check, ZERO network round-trips. This is load-bearing when many repos are pushed in a loop
-  ## (e.g. dm-packaging-helper-script pushes every derivative-maker package x N remotes each):
-  ## contacting every remote just to decide there is nothing to push -- whether via 'git push'
-  ## itself or an ls-remote pre-check -- would be hundreds of connections and risks a rate-limit
-  ## BAN. So we must not touch the network to conclude "up to date".
-  ## Deliberate tradeoff (do NOT "fix" this with ls-remote -- that reintroduces the hammering): the
-  ## tracking ref can go stale if the remote url is repointed, or another checkout pushed the
-  ## branch. Our writer (this bot, shared checkout) keeps it current in the normal path; the rare
-  ## stale case (a skipped push until the local tip next advances) is accepted over banning.
   refspecs=()
   for branch in "${branches[@]}"; do
     local_sha="$(git rev-parse --verify "refs/heads/${branch}^{commit}")"
@@ -2671,94 +2362,25 @@ git_push_to_remote() {
   done
 }
 
-## See 'genmkfile git-tag-push' help text above for the contract
-## (env vars, default vs configured mode, strict-error rules).
-make_git_tag_push() {
-  local branch remote tag tags_at_tip current_branch unique_tags_raw
-  local -a branches remotes all_tags unique_tags
-  local -A push_label=()
-
-  # shellcheck source=../../../../helper-scripts/usr/libexec/helper-scripts/parallel.bsh
-  source "${HELPER_SCRIPTS_PATH:-}/usr/libexec/helper-scripts/parallel.bsh"
-
-  make_function_run make_git_tag_shared
-  make_require append-once
-
-  if [ -n "${make_git_push_branches:-}" ]; then
-    ## Fold newlines to spaces first: read -a on a here-string stops at the first
-    ## newline, so a newline-separated value silently drops all but line 1.
-    read -r -a branches <<< "${make_git_push_branches//$'\n'/ }"
-    [ "${#branches[@]}" -gt 0 ] \
-      || exit_with_error 1 "make_git_push_branches is set but parses to an empty list (whitespace-only?)."
-    for branch in "${branches[@]}"; do
-      git show-ref --verify --quiet -- "refs/heads/${branch}" \
-        || exit_with_error 1 "branch '${branch}' (from make_git_push_branches) does not exist in this repo."
-    done
-  else
-    current_branch="$(git rev-parse --abbrev-ref HEAD)"
-    [ "${current_branch}" != "HEAD" ] \
-      || exit_with_error 1 "HEAD is detached; cannot determine current branch. Set make_git_push_branches or check out a branch."
-    branches=( "${current_branch}" )
-  fi
-
-  ## Fold newlines to spaces first (e.g. make_git_push_remotes="$(git remote)"):
-  ## read -a on a here-string stops at the first newline, silently dropping the rest.
-  read -r -a remotes <<< "${make_git_push_remotes//$'\n'/ }"
-  [ "${#remotes[@]}" -gt 0 ] \
-    || exit_with_error 1 "make_git_push_remotes is set but parses to an empty list (whitespace-only?)."
-  for remote in "${remotes[@]}"; do
-    git remote get-url -- "${remote}" &>/dev/null \
-      || exit_with_error 1 "remote '${remote}' (from make_git_push_remotes) does not exist in this repo."
-  done
-
-  all_tags=()
-  for branch in "${branches[@]}"; do
-    tags_at_tip="$(git tag --points-at "refs/heads/${branch}")"
-    [ -n "${tags_at_tip}" ] \
-      || exit_with_error 1 "no tag at tip of branch '${branch}'; create a signed tag at the tip before pushing."
-    while IFS= read -r tag; do
-      [ -n "${tag}" ] || continue
-      all_tags+=( "${tag}" )
-    done <<< "${tags_at_tip}"
-  done
-
-  unique_tags_raw="$(printf "%s\n" "${all_tags[@]}" | sort --unique)"
-  mapfile -t unique_tags <<< "${unique_tags_raw}"
-
-  for remote in "${remotes[@]}"; do
-    git_push_to_remote "${remote}" "${branches[@]}" -- "${unique_tags[@]}" &
-    # shellcheck disable=SC2034  # read by parallel_wait via nameref (shellcheck cannot see the source)
-    push_label[$!]="${remote}"
-  done
-
-  # shellcheck disable=SC2154  # parallel_failures is set by parallel_wait (parallel.bsh)
-  if ! parallel_wait push_label; then
-    exit_with_error 1 "atomic push failed: branches=[${branches[*]}] tags=[${unique_tags[*]}] remote(s)=[${parallel_failures[*]}]"
-  fi
-
-  make_output_info "atomic push succeeded: branches=[${branches[*]}] tags=[${unique_tags[*]}] remotes=[${remotes[*]}]"
-}
-
-## See 'genmkfile git-push' help text above for the contract. Tag-less
-## sibling of make_git_tag_push: no signed tag at tip is required, and
-## no make_git_tag_shared version/package state is touched, so it runs
-## in ANY repo. git_push_to_remote skips an up-to-date tip via the LOCAL
-## tracking ref (no network), so re-running does not hammer remotes.
-make_git_push() {
-  local branch remote current_branch
-  local -a branches remotes
+make_git_push_shared() {
+  local mode branch remote tag tags_at_tip current_branch unique_tags_raw
+  local -a branches remotes all_tags unique_tags tags_report_maybe
   local -A push_label=()
 
   # shellcheck source=../../../../helper-scripts/usr/libexec/helper-scripts/parallel.bsh
   source "${HELPER_SCRIPTS_PATH:-}/usr/libexec/helper-scripts/parallel.bsh"
 
   make_require git
+  make_require append-once
 
-  [ -n "${make_git_push_remotes:-}" ] || make_git_push_remotes="origin"
+  mode="${1:-}"
+
+  if [ "${mode}" = 'with-tags' ]; then
+    make_function_run make_git_tag_shared
+  fi
 
   if [ -n "${make_git_push_branches:-}" ]; then
-    ## Fold newlines to spaces first: read -a on a here-string stops at the first
-    ## newline, so a newline-separated value silently drops all but line 1.
+    ## Fold newlines to spaces so we can support newline-separated values too.
     read -r -a branches <<< "${make_git_push_branches//$'\n'/ }"
     [ "${#branches[@]}" -gt 0 ] \
       || exit_with_error 1 "make_git_push_branches is set but parses to an empty list (whitespace-only?)."
@@ -2773,8 +2395,7 @@ make_git_push() {
     branches=( "${current_branch}" )
   fi
 
-  ## Fold newlines to spaces first (e.g. make_git_push_remotes="$(git remote)"):
-  ## read -a on a here-string stops at the first newline, silently dropping the rest.
+  ## Fold newlines to spaces so we can support newline-separated values too.
   read -r -a remotes <<< "${make_git_push_remotes//$'\n'/ }"
   [ "${#remotes[@]}" -gt 0 ] \
     || exit_with_error 1 "make_git_push_remotes is set but parses to an empty list (whitespace-only?)."
@@ -2783,17 +2404,50 @@ make_git_push() {
       || exit_with_error 1 "remote '${remote}' (from make_git_push_remotes) does not exist in this repo."
   done
 
-  for remote in "${remotes[@]}"; do
-    git_push_to_remote "${remote}" "${branches[@]}" &
-    # shellcheck disable=SC2034  # read by parallel_wait via nameref (shellcheck cannot see the source)
-    push_label[$!]="${remote}"
-  done
+  if [ "${mode}" = 'with-tags' ]; then
+    all_tags=()
+    for branch in "${branches[@]}"; do
+      tags_at_tip="$(git tag --points-at "refs/heads/${branch}")"
+      [ -n "${tags_at_tip}" ] \
+        || exit_with_error 1 "no tag at tip of branch '${branch}'; create a signed tag at the tip before pushing."
+      while IFS= read -r tag; do
+        [ -n "${tag}" ] || continue
+        all_tags+=( "${tag}" )
+      done <<< "${tags_at_tip}"
+    done
 
-  if ! parallel_wait push_label; then
-    exit_with_error 1 "push failed: branches=[${branches[*]}] remote(s)=[${parallel_failures[*]}]"
+    unique_tags_raw="$(printf "%s\n" "${all_tags[@]}" | sort --unique)"
+    mapfile -t unique_tags <<< "${unique_tags_raw}"
+
+    for remote in "${remotes[@]}"; do
+      git_push_to_remote "${remote}" "${branches[@]}" -- "${unique_tags[@]}" &
+      # Do we need shellcheck disable=SC2034 here?
+      push_label[$!]="${remote}"
+    done
+    tags_report_maybe=" tags=[${unique_tags[*]}]"
+  else
+    for remote in "${remotes[@]}"; do
+      git_push_to_remote "${remote}" "${branches[@]}" &
+      # Do we need shellcheck disable=SC2034 here?
+      push_label[$!]="${remote}"
+    done
+    tags_report_maybe=''
   fi
 
-  make_output_info "push succeeded: branches=[${branches[*]}] remotes=[${remotes[*]}]"
+  # shellcheck disable=SC2154
+  if ! parallel_wait push_label; then
+    exit_with_error 1 "atomic push failed: branches=[${branches[*]}]${tags_report_maybe} remote(s)=[${parallel_failures[*]}]"
+  fi
+
+  make_output_info "atomic push succeeded: branches=[${branches[*]}]${tags_report_maybe} remotes=[${remotes[*]}]"
+}
+
+make_git_tag_push() {
+  make_function_run make_git_push_shared with-tags
+}
+
+make_git_push() {
+  make_function_run make_git_push_shared without-tags
 }
 
 make_git_tag_show_latest() {
@@ -2876,17 +2530,15 @@ make_reprepro_remove() {
 }
 
 make_source_overrides_file() {
-  ## style-ok: allow-sc1091-disable -- the make-helper-overrides.bsh files below
-  ## are OPTIONAL per-project hooks that are legitimately absent in an isolated
-  ## checkout, so shellcheck cannot follow them.
+  ## style-ok: allow-sc1091-disable - these are optional files.
   if test -x "./make-helper-overrides.bsh"; then
     bash -n "./make-helper-overrides.bsh"
-    # shellcheck disable=SC1091  # optional per-project override, absent in an isolated checkout
+    # shellcheck disable=SC1091
     source "./make-helper-overrides.bsh"
   fi
   if test -x "./debian/make-helper-overrides.bsh"; then
     bash -n "./debian/make-helper-overrides.bsh"
-    # shellcheck disable=SC1091  # optional per-project override, absent in an isolated checkout
+    # shellcheck disable=SC1091
     source "./debian/make-helper-overrides.bsh"
   fi
 }
@@ -2975,64 +2627,39 @@ if was_executed "${BASH_SOURCE[0]}"; then
   make_function_run make_source_overrides_file "$@"
   make_function_run make_source_overrides_folder "$@"
 
-  ## Classify the requested target(s) so a NON-COWBUILDER action never trips on
-  ## cowbuilder config it does not use:
-  ##  - __needs_distdir      run make_get_distdir/destdir (set DISTDIR/DESTDIR).
-  ##  - __enforce_cowbuilder additionally REQUIRE + redirect to the cowbuilder
-  ##                         dist folder -- only a real build/dist target does.
-  ##  - __needs_version_info parse debian/control + dpkg-parsechangelog
-  ##                         (make_source_package_name, versions, ...); dpkg-dev
-  ##                         may be absent on a fresh system.
-  ##  - __needs_dependencies parse Build-Depends / Depends only.
-  ## git-push is fully standalone; help/test are query/dummy -> none of these.
-  ## The git-tag-* / git-verify family needs make_source_package_name
-  ## (make_get_variables) but never builds with cowbuilder, so it sets DISTDIR at
-  ## its default WITHOUT the cowbuilder-folder requirement. deb-*-dep only
-  ## resolves dependencies. Everything else keeps the conservative default:
-  ## DISTDIR set AND cowbuilder enforced.
-  __needs_distdir=false
-  __enforce_cowbuilder=false
+  make_function_run make_get_distdir
+  make_function_run make_get_destdir
+
+  ## deb-{build,run,all}-dep only need Build-Depends / Depends parsed
+  ## from debian/control. Every other target additionally needs
+  ## dpkg-parsechangelog (from dpkg-dev, pulled in by build-essential)
+  ## which may be absent on a fresh system -- the user would run
+  ## 'genmkfile deb-build-dep' to install it. So call the full setup
+  ## only when a target actually needs it.
   __needs_version_info=false
   __needs_dependencies=false
   for __arg in "$@"; do
     case "${__arg}" in
-    git-push | help | test | '' | --)
-      ## Non-targets ('' / end-of-options) and pure query/dummy targets need no
-      ## DISTDIR, version info, or cowbuilder folder.
-      ;;
-    git-tag-push | git-tag-show | git-tag-show-latest | git-tag-sign \
-      | git-tag-verify | git-tag-check | git-commit-verify | git-verify)
-      __needs_distdir=true
-      __needs_version_info=true
+    '' | help | --)
       ;;
     deb-build-dep | deb-run-dep | deb-all-dep)
-      __needs_distdir=true
       __needs_dependencies=true
       ;;
     *)
-      __needs_distdir=true
-      __enforce_cowbuilder=true
       __needs_version_info=true
       ;;
     esac
   done
   ## No arguments falls through to make_all in make_parse_cmd; treat it
   ## like any other build target.
-  [ $# -eq 0 ] && { __needs_distdir=true; __enforce_cowbuilder=true; __needs_version_info=true; }
-
-  if [ "${__needs_distdir}" = "true" ]; then
-    make_enforce_cowbuilder_distdir="${__enforce_cowbuilder}"
-    make_function_run make_get_distdir
-    make_function_run make_get_destdir
-  fi
+  [ $# -eq 0 ] && __needs_version_info=true
 
   if [ "${__needs_version_info}" = "true" ]; then
     make_function_run make_get_variables
   elif [ "${__needs_dependencies}" = "true" ]; then
     make_function_run make_get_dependencies
   fi
-  unset __arg __needs_distdir __enforce_cowbuilder __needs_version_info \
-    __needs_dependencies make_enforce_cowbuilder_distdir
+  unset __arg __needs_version_info __needs_dependencies
 
   make_function_run make_parse_cmd "$@"
   make_function_run make_deinit
