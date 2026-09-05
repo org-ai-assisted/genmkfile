@@ -156,20 +156,25 @@ make_parse_cmd() {
   ## Thanks to:
   ## http://mywiki.wooledge.org/BashFAQ/035
 
-  local matched="false" arg target_fn
+  local matched="false" arg target_fn end_of_options="false"
 
   while [ $# -gt 0 ]; do
     arg="$1"
-    case "${arg}" in
-    --)
-      true "$0: end-of-options"
-      shift
-      break
-      ;;
-    -*)
-      exit_with_error 1 "unknown option: ${arg}"
-      ;;
-    esac
+    if [ "${end_of_options}" = "false" ]; then
+      case "${arg}" in
+      --)
+        ## End of options: every REMAINING argument is a target (even one starting with '-'),
+        ## per the usual '--' convention. A bare 'break' here dropped them -- 'genmkfile --
+        ## install' then ran make_all instead of make_install.
+        end_of_options="true"
+        shift
+        continue
+        ;;
+      -*)
+        exit_with_error 1 "unknown option: ${arg}"
+        ;;
+      esac
+    fi
 
     ## Targets map to 'make_<target with dashes -> underscores>'. If no such
     ## function exists, error out.
