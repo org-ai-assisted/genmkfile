@@ -1813,7 +1813,7 @@ make_helper() {
   shopt -s globstar dotglob nullglob
   local source_directory source_fso file_without_pwd file_with_destdir
   local still_installed="false"
-  local fso_with_destdir_stat
+  local fso_with_destdir_stat destdir_low_mode destdir_high_mode
   local genmkfile_rsync_opts folder_permission_skip_list
 
   make_require safe-rm rsync
@@ -1972,15 +1972,21 @@ make_helper() {
                   ;;
               esac
             fi
+            ## Fix the permission bits (low 3 octal digits) while PRESERVING any
+            ## setuid/setgid/sticky bit: a bare 3-digit 'chmod 755' clears them, silently
+            ## stripping setuid on a re-install. stat '%a' reports a set special bit as a
+            ## leading digit (e.g. '4755'); keep it, and compare/fix only the low 3 digits.
+            destdir_low_mode="${fso_with_destdir_stat: -3}"
+            destdir_high_mode="${fso_with_destdir_stat%"${destdir_low_mode}"}"
             if test -x "${source_fso}" || [ "${genmkfile_force_exec}" = "true" ]; then
-              if [ "${fso_with_destdir_stat}" != "755" ]; then
-                make_output_info "chmod -- 755 '${file_with_destdir}' (executable, wrong mode)"
-                chmod -- 755 "${file_with_destdir}"
+              if [ "${destdir_low_mode}" != "755" ]; then
+                make_output_info "chmod -- ${destdir_high_mode}755 '${file_with_destdir}' (executable, wrong mode)"
+                chmod -- "${destdir_high_mode}755" "${file_with_destdir}"
               fi
             else
-              if [ "${fso_with_destdir_stat}" != "644" ]; then
-                make_output_info "chmod -- 644 '${file_with_destdir}' (non-executable, wrong mode)"
-                chmod -- 644 "${file_with_destdir}"
+              if [ "${destdir_low_mode}" != "644" ]; then
+                make_output_info "chmod -- ${destdir_high_mode}644 '${file_with_destdir}' (non-executable, wrong mode)"
+                chmod -- "${destdir_high_mode}644" "${file_with_destdir}"
               fi
             fi
           fi
