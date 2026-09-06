@@ -122,7 +122,7 @@ genmkfile deb-pkg
 - `dist_build_pbuilder_config_file` -- `--configfile` for cowbuilder/pbuilder.
 - `make_use_lintian=true|false` -- **fails closed on a WARNING, not just an error.** Any lintian output at all (the default opts add `--pedantic --info --display-info`) reaches `make_lintian_on_warning`, which exits non-zero unless `make_lintian_fail_open_versus_closed=open`. It runs AFTER the `.deb` is already built, so the package exists in the dist folder even though `deb-pkg` "failed" -- check for the artifact before rebuilding. Unset means autodetect: lintian runs if installed. Use `make_use_lintian=false` for a build you just want the `.deb` from.
 - `make_use_debsign=true` + `make_debsign_opts` (debsign with `sq verify` against `$DEBEMAIL`).
-- genmkfile passes to cowbuilder: `--build <dsc> --basepath /var/cache/pbuilder/base.cow_<arch> --buildplace /var/cache/pbuilder/cow.cow_<arch> --buildresult <dist_folder> --debbuildopts=-sa`. **It does NOT create the base** -- create it once first.
+- genmkfile passes to cowbuilder: `--build <dsc> --basepath /var/cache/pbuilder/base.cow_<arch> --buildplace /var/cache/pbuilder/cow.cow_<arch> --buildresult <tmpdir> --debbuildopts=-sa`, where `<tmpdir>` is a fresh temp dir under `genmkfile_temp_dir`; only on success does genmkfile `mv` the artifacts into `<dist_folder>` (a killed/failed build leaves nothing in the dist folder). **It does NOT create the base** -- create it once first.
 
 ### Create the cowbuilder base (once per arch)
 
