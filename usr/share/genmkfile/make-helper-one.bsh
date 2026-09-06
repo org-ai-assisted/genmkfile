@@ -879,7 +879,17 @@ make_dist() {
   test -w "${make_upstream_tarball_real_path}"
   safe-rm -f -- "${make_upstream_tarball_real_path}"
 
-  empty_directories="$(find "." -not -ipath '*.git*' -type d -empty)"
+  ## Mirror the tarball find's exclusions below: debian/ is excluded from the upstream tarball
+  ## and .git/.gitignore are never packed, so an empty dir that would NOT be tarred must not trip
+  ## this guard. Exclude only './debian' and its contents (a bare './debian*' also swallows
+  ## sibling 'debian*' names), exactly as the tar find does.
+  empty_directories="$(find "." \
+    -not -path '*/\.git/*' \
+    -not -path '*/\.git' \
+    -not -name '.gitignore' \
+    -not -path './debian' \
+    -not -path './debian/*' \
+    -type d -empty)"
 
   if [ -n "${empty_directories}" ]; then
     exit_with_error 1 "Empty directory found! empty_directories:
@@ -898,7 +908,8 @@ find \
       -not -path '*/\.git/*' \
       -not -path '*/\.git' \
       -not -name '.gitignore' \
-      -not -path './debian*' \
+      -not -path './debian' \
+      -not -path './debian/*' \
       -print0 \
          | tar \
             --null \
@@ -922,7 +933,8 @@ find \
     -not -path '*/\.git/*' \
     -not -path '*/\.git' \
     -not -name '.gitignore' \
-    -not -path './debian*' \
+    -not -path './debian' \
+    -not -path './debian/*' \
     -print0 |
     tar \
       --null \
@@ -1900,12 +1912,15 @@ genmkfile_install_path_excluded() {
   ## excludes its contents -- covered by testing every ancestor component. Reads the caller's
   ## 'genmkfile_install_excludes' via dynamic scoping (the same idiom make_helper documents for
   ## its mode flags), so the pattern list is expanded once, not per entry.
-  local path="$1" comp pattern
-  local -a comps
-  ## 'read -a' word-splits on IFS WITHOUT globbing, so a component containing a glob char is
-  ## not expanded; strip the leading '/' first so there is no empty leading field.
-  IFS='/' read -r -a comps <<< "${path#/}"
-  for comp in "${comps[@]}"; do
+  local rest="${1#/}" comp pattern
+  ## Split on '/' with parameter expansion, NOT 'read' -- 'read' stops at the first NEWLINE, so a
+  ## path whose name contains a newline (rsync still excludes it, so its dest is never created)
+  ## would truncate and wrongly pass, reaching the mode-fix 'stat' and aborting under 'errexit'.
+  ## Parameter expansion is newline-safe and does not glob-expand a component.
+  while [ -n "${rest}" ]; do
+    comp="${rest%%/*}"
+    rest="${rest#"${comp}"}"
+    rest="${rest#/}"
     [ -n "${comp}" ] || continue
     for pattern in "${genmkfile_install_excludes[@]}"; do
       # shellcheck disable=SC2254  ## pattern is an intentional glob
