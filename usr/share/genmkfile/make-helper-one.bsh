@@ -177,7 +177,11 @@ make_parse_cmd() {
     fi
 
     ## Targets map to 'make_<target with dashes -> underscores>'. If no such
-    ## function exists, error out.
+    ## function exists, error out. NOTE: any 'make_*' function is dispatchable this way,
+    ## internal helpers included -- there is no public/internal allowlist. The SUPPORTED
+    ## public targets are the ones 'make_help' documents; invoking an undocumented internal
+    ## target (e.g. 'function-run', 'get-variables') is unsupported and may misbehave.
+    ## Accepted: the gate stays a plain existence check, not a curated allowlist.
     target_fn="make_${arg//-/_}"
     if ! declare -F "${target_fn}" >/dev/null 2>&1; then
       exit_with_error 1 "unrecognized target '${arg}' (run 'genmkfile help' to see supported targets)"
@@ -1160,6 +1164,11 @@ a note like 'TODO#3.md') may have triggered it -- remove it."
       printf "%s\n" "${filename_without_dot} => ${cleaned_filename_without_hash}" | sponge -a -- "${temp_deb_install_file}"
     done
 
+    ## NOTE (accepted limitation): this WRITES the freshly generated per-package files but
+    ## does NOT prune a stale 'debian/<pkg>.install' left behind when a file's '#<pkgname>'
+    ## tag is renamed or removed -- that orphan lingers and can cause a dpkg file-conflict
+    ## (two .debs shipping the same path). Rare in practice; the maintainer removes the
+    ## orphan by hand. Not auto-pruned on purpose (avoids deleting a hand-maintained file).
     for new_file in "${genmkfile_temp_dir}"/*.install; do
       real_deb_install_file="debian/${new_file##*/}"
       if test -f "${real_deb_install_file}"; then
