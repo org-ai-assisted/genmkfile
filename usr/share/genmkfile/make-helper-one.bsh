@@ -1067,6 +1067,48 @@ make_debinstfile_create() {
 
   if "${find_cmd[@]}" | grep --fixed-strings -- '#' >/dev/null; then
     true "multi-package hash filename found: yes"
+
+    ## Fail closed on a silently-dropped file. In multi-package mode ONLY '#<pkgname>'-tagged
+    ## files are routed (loop below); an installable file under a shipped directory with NO
+    ## '#' in its basename matches nothing and lands in NO binary package -- a green build
+    ## shipping an incomplete .deb. Single-package mode installs those directories wholesale
+    ## ('${d}/*'), so the FIRST '#'-tag flips the whole source into multi-package mode and an
+    ## untagged sibling vanishes without a word. Refuse and NAME every untagged file so the
+    ## maintainer tags it '<path>#<pkgname>' (or opts the source out with 'nogenmkfile'). The
+    ## '#'-in-basename test mirrors the routing find's '-iname' (a '#' in a PARENT directory
+    ## does not count as a tag), so scan and routing agree on what is tagged.
+    local scan_dir
+    local -a untagged_scan_dirs=()
+    for scan_dir in "${make_folder_list_for_un_and_install[@]}"; do
+      if test -d "./${scan_dir}"; then
+        untagged_scan_dirs+=("./${scan_dir}")
+      fi
+    done
+    if [ "${#untagged_scan_dirs[@]}" -gt 0 ]; then
+      local untagged_list
+      ## pipefail in a subshell: a find failure AFTER partial output must abort, never
+      ## under-report the dropped set (a weakened guard is a silent-pass by another name).
+      untagged_list="$( set -o pipefail
+        find "${untagged_scan_dirs[@]}" \
+          -not -path '*/\.git/*' \
+          -not -path '*/\.git' \
+          -not -name '.gitignore' \
+          -not -iname '*#*' \
+          '(' -type f -o -type l ')' \
+        | LC_ALL='C' sort )" \
+        || exit_with_error 1 "scanning for untagged multi-package install files failed"
+      if [ -n "${untagged_list}" ]; then
+        exit_with_error 1 "\
+multi-package install mode is active (a '#<pkgname>'-tagged file exists), but these installable \
+files carry no '#<pkgname>' tag and would be SILENTLY DROPPED from every binary package:
+${untagged_list}
+Tag each file '<path>#<pkgname>' to route it into a binary package, or opt the whole source out \
+with a 'nogenmkfile' marker in 'debian/${make_source_package_name:-<source>}.install'. If you did \
+NOT intend multi-package routing, a stray '#'-bearing filename (an editor autosave like '#x#' or \
+a note like 'TODO#3.md') may have triggered it -- remove it."
+      fi
+    fi
+
     find_cmd+=(-print0)
 
     ## Capture the file list to a temp with an EXPLICIT rc check (pipefail in a subshell so a
