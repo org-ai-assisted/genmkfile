@@ -145,6 +145,19 @@ make_init() {
   #pushd "$GENMKFILE_ROOT_DIR" >/dev/null
 
   genmkfile_temp_dir="$(mktemp --directory)"
+  ## Remove the temp dir on ANY exit, not only the normal make_deinit path: under 'errexit' an
+  ## error exit (unrecognized target, a failed cowbuilder/dpkg step, ...) never reaches
+  ## make_deinit and would leak one 'mktemp --directory' per failed run. Idempotent with
+  ## make_deinit (safe-rm --force on an already-removed dir is a no-op) and does not change the
+  ## exit status. Command-substitution and '()' subshells reset a caught trap to its default, so
+  ## this fires only on the top-level shell's exit -- never mid-run inside a '$(...)'.
+  trap genmkfile_temp_dir_cleanup EXIT
+}
+
+genmkfile_temp_dir_cleanup() {
+  ## Best-effort removal of make_init's temp dir on any exit path (idempotent with make_deinit).
+  [ -n "${genmkfile_temp_dir:-}" ] || return 0
+  safe-rm --recursive --force -- "${genmkfile_temp_dir}" 2>/dev/null || true
 }
 
 make_deinit() {
