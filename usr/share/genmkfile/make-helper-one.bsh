@@ -1877,12 +1877,46 @@ genmkfile_path_present() {
   [ -f "$1" ] || [ -L "$1" ]
 }
 
+genmkfile_install_exclude_patterns() {
+  ## Build residue never belongs in an install tree. SINGLE SOURCE, consumed by BOTH the
+  ## rsync '--exclude' list and the entry-loop skip (genmkfile_install_path_excluded): the two
+  ## MUST agree, because rsync does not create these in DESTDIR and the per-entry mode-fix
+  ## 'stat' would then fail on a never-created path and abort make_helper under 'errexit'.
+  printf '%s\n' __pycache__ .mypy_cache .pytest_cache .hypothesis '*.pyc' '*.pyo'
+}
+
+genmkfile_install_path_excluded() {
+  ## True when the path matches the shared exclude set the way 'rsync --exclude=<pat>' does: a
+  ## slash-less pattern matches any path COMPONENT's basename, and excluding a directory also
+  ## excludes its contents -- covered by testing every ancestor component. Reads the caller's
+  ## 'genmkfile_install_excludes' via dynamic scoping (the same idiom make_helper documents for
+  ## its mode flags), so the pattern list is expanded once, not per entry.
+  local path="$1" comp pattern
+  local -a comps
+  ## 'read -a' word-splits on IFS WITHOUT globbing, so a component containing a glob char is
+  ## not expanded; strip the leading '/' first so there is no empty leading field.
+  IFS='/' read -r -a comps <<< "${path#/}"
+  for comp in "${comps[@]}"; do
+    [ -n "${comp}" ] || continue
+    for pattern in "${genmkfile_install_excludes[@]}"; do
+      # shellcheck disable=SC2254  ## pattern is an intentional glob
+      case "${comp}" in
+        ${pattern})
+          return 0
+          ;;
+      esac
+    done
+  done
+  return 1
+}
+
 make_helper() {
   shopt -s globstar dotglob nullglob
   local source_directory source_fso file_without_pwd file_with_destdir
   local still_installed="false"
   local fso_with_destdir_stat
   local genmkfile_rsync_opts folder_permission_skip_list
+  local -a genmkfile_install_excludes
 
   make_require safe-rm rsync
 
@@ -1921,13 +1955,15 @@ make_helper() {
   genmkfile_rsync_opts+=("--links")         ## copy symlinks as symlinks
   genmkfile_rsync_opts+=("--hard-links")    ## preserve hard links
   genmkfile_rsync_opts+=("--safe-links")    ## ignore symlinks that point outside the tree
-  ## Never install build residue.
-  genmkfile_rsync_opts+=("--exclude=__pycache__")
-  genmkfile_rsync_opts+=("--exclude=*.pyc")
-  genmkfile_rsync_opts+=("--exclude=*.pyo")
-  genmkfile_rsync_opts+=("--exclude=.mypy_cache")
-  genmkfile_rsync_opts+=("--exclude=.pytest_cache")
-  genmkfile_rsync_opts+=("--exclude=.hypothesis")
+  ## Never install build residue. 'make install' does not run make_strip_build_residue (only
+  ## the 'deb' path does), so exclude the same set here. The entry loop below MUST skip these
+  ## same paths (genmkfile_install_path_excluded) -- rsync does not create them in DESTDIR and
+  ## the per-entry 'stat' would otherwise abort under 'errexit'. Single source: the pattern list.
+  mapfile -t genmkfile_install_excludes < <(genmkfile_install_exclude_patterns)
+  local genmkfile_exclude_pattern
+  for genmkfile_exclude_pattern in "${genmkfile_install_excludes[@]}"; do
+    genmkfile_rsync_opts+=("--exclude=${genmkfile_exclude_pattern}")
+  done
   #genmkfile_rsync_opts+=("--progress")
   #genmkfile_rsync_opts+=("--verbose")
 
@@ -1954,8 +1990,13 @@ make_helper() {
     local rsync_done
     rsync_done=""
     for source_fso in "${PWD}/${source_directory}"/**; do
-      genmkfile_file_has_been_copied=true
       file_without_pwd="${source_fso#"${PWD}"}"
+      ## Skip build residue rsync excluded above (same shared set): its DESTDIR path was never
+      ## created, so the mode-fix 'stat' below would fail on it and abort under 'errexit'.
+      if genmkfile_install_path_excluded "${file_without_pwd}"; then
+        continue
+      fi
+      genmkfile_file_has_been_copied=true
       ## Issue: starts with double '//'
       #file_with_destdir="${DESTDIR}${file_without_pwd}"
       ## New: single '/'
