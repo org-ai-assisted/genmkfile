@@ -145,6 +145,13 @@ make_init() {
   #pushd "$GENMKFILE_ROOT_DIR" >/dev/null
 
   genmkfile_temp_dir="$(mktemp --directory)"
+  ## Always remove the temp dir on exit.
+  trap genmkfile_temp_dir_cleanup EXIT
+}
+
+genmkfile_temp_dir_cleanup() {
+  [ -n "${genmkfile_temp_dir:-}" ] || return 0
+  safe-rm --recursive --force -- "${genmkfile_temp_dir}" 2>/dev/null || true
 }
 
 make_deinit() {
@@ -156,23 +163,27 @@ make_parse_cmd() {
   ## Thanks to:
   ## http://mywiki.wooledge.org/BashFAQ/035
 
-  local matched="false" arg target_fn
+  local matched="false" arg target_fn end_of_options="false"
 
   while [ $# -gt 0 ]; do
     arg="$1"
-    case "${arg}" in
-    --)
-      true "$0: end-of-options"
-      shift
-      break
-      ;;
-    -*)
-      exit_with_error 1 "unknown option: ${arg}"
-      ;;
-    esac
+    if [ "${end_of_options}" = "false" ]; then
+      case "${arg}" in
+        --)
+          end_of_options="true"
+          shift
+          continue
+          ;;
+        -*)
+          exit_with_error 1 "unknown option: ${arg}"
+          ;;
+      esac
+    fi
 
     ## Targets map to 'make_<target with dashes -> underscores>'. If no such
-    ## function exists, error out.
+    ## function exists, error out. REMINDER: any 'make_*' function is
+    ## dispatchable this way, internal helpers included. Calling targets not
+    ## documented by 'make_help' is unsupported and may misbehave.
     target_fn="make_${arg//-/_}"
     if ! declare -F "${target_fn}" >/dev/null 2>&1; then
       exit_with_error 1 "unrecognized target '${arg}' (run 'genmkfile help' to see supported targets)"
@@ -222,7 +233,7 @@ make_dependencies_filter_helper() {
     -e 's/\[[^]]*\]//g' \
     -e 's/<[^>]*>//g' \
     -e 's/\${[^}]*}//g' \
-    -e 's/|/ /g'
+    -e 's/|/ /g' \
     -e 's/ \+/ /g')"
   printf "%s\n" "${temp}"
 }
@@ -331,13 +342,18 @@ make_parse_changelog_version() {
 ## make_debian_control_file_absolute_path from the caller.
 make_get_variables_parse_stanzas() {
   local package binary_package_architecture line skip_debs_artifact
-  local package_name_architecture continuation temp
+  local package_name_architecture temp stanza_list
   package=""
   binary_package_architecture=""
   ## Neither 'Package' nor 'Architecture' is a folded or multiline field
   ## according to
   ## https://www.debian.org/doc/debian-policy/ch-controlfields.html,
   ## therefore no need to handle continuation lines for them.
+  make_require safe-rm
+  if ! stanza_list="$(grep-dctrl --show-field=Package,Architecture '' "${make_debian_control_file_absolute_path}")"; then
+    safe-rm --force -- "${stanza_list}"
+    exit_with_error 1 "parsing debian/control failed (grep-dctrl) -- malformed control?"
+  fi
   while IFS= read -r line; do
     case "${line}" in
       "Package: "*)
@@ -348,6 +364,18 @@ make_get_variables_parse_stanzas() {
         ;;
       "")
         [ -n "${package}" ] || continue
+        ## Validate the control-derived binary package name before it is
+        ## interpolated into deletion paths.
+        ##
+        ## TODO: Previously this check forbade packages with a name starting
+        ## with '.'. Without '/', such a package name shouldn't be able to
+        ## trigger deletion of wrong files, but double-check this is safe. The
+        ## regex here matches the restrictions on Debian package names
+        ## specified by
+        ## https://www.debian.org/doc/debian-policy/ch-controlfields.html#s-f-source.
+        if [ -z "${package}" ] || ! [[ "${package}" =~ ^[-a-z0-9+.]+$ ]]; then
+          exit_with_error 1 "invalid binary package name '${package}' in debian/control."
+        fi
         true "package: ${package}"
         true "make_pkg_version: ${make_pkg_version}"
         true "make_pkg_revision: ${make_pkg_revision}"
@@ -381,6 +409,8 @@ make_get_variables_parse_stanzas() {
           ## no-op (exit 0), so this is safe.
           true "INFO: not expecting a .deb for binary package '${package}': Architecture '${binary_package_architecture}' does not cover target architecture '${target_architecture}'."
           skip_debs_artifact="true"
+          ## make_cross_build_platform_list is set by make-helper.bsh.
+          # shellcheck disable=SC2154
           if [[ " ${make_cross_build_platform_list} " = *" ${binary_package_architecture} "* ]]; then
             all_target_debs_are_arch_all="false"
           fi
@@ -399,7 +429,7 @@ make_get_variables_parse_stanzas() {
         binary_package_architecture=""
       ;;
     esac
-  done < <(grep-dctrl --show-field=Package,Architecture '' "${make_debian_control_file_absolute_path}")
+  done <<< "${stanza_list}"
 }
 
 make_get_variables() {
@@ -816,6 +846,14 @@ make_use_cowbuilder=true make_cross_build_platform_list='amd64 arm64' genmkfile 
 make_use_cowbuilder=true make_cross_build_platform_list='amd64' genmkfile deb-pkg"
 }
 
+find_pkgfiles_args=(
+  -not -path '*/\.git/*'
+  -not -path '*/\.git'
+  -not -name '.gitignore'
+  -not -path './debian'
+  -not -path './debian/*'
+)
+
 make_all() {
   if test -f "${PWD}/Makefile_orig"; then
     make -f "${PWD}/Makefile_orig" all "$@"
@@ -844,8 +882,10 @@ make_dist() {
   touch -- "${make_upstream_tarball_real_path}"
   test -w "${make_upstream_tarball_real_path}"
   safe-rm -f -- "${make_upstream_tarball_real_path}"
-
-  empty_directories="$(find "." -not -ipath '*.git*' -type d -empty)"
+  ## Mirror the tarball find's exclusions below.
+  empty_directories="$(find "." \
+    "${find_pkgfiles_args[@]}" \
+    -type d -empty)"
 
   if [ -n "${empty_directories}" ]; then
     exit_with_error 1 "Empty directory found! empty_directories:
@@ -860,24 +900,21 @@ cd ${PWD}"
 
   msg="manual reproduction:
 find \
-      '.' \
-      -not -path '*/\.git/*' \
-      -not -path '*/\.git' \
-      -not -name '.gitignore' \
-      -not -path './debian*' \
-      -print0 \
-         | tar \
-            --null \
-            --no-recursion \
-            --create \
-            --owner=0 --group=0 --numeric-owner \
-            --mode=go=rX,u+rw,a-s \
-            --sort=name \
-            --mtime='2015-10-21 00:00Z' \
-            --xz \
-            --file='${make_upstream_tarball_real_path}' \
-            -T \
-            -
+'.' \
+${find_pkgfiles_args[*]} \
+-print0 \
+  | tar \
+    --null \
+    --no-recursion \
+    --create \
+    --owner=0 --group=0 --numeric-owner \
+    --mode=go=rX,u+rw,a-s \
+    --sort=name \
+    --mtime='2015-10-21 00:00Z' \
+    --xz \
+    --file='${make_upstream_tarball_real_path}' \
+    -T \
+    -
    "
 
   msg="$(printf "%s\n" "${msg}" | sed 's/  */ /g')"
@@ -885,10 +922,7 @@ find \
 
   find \
     '.' \
-    -not -path '*/\.git/*' \
-    -not -path '*/\.git' \
-    -not -name '.gitignore' \
-    -not -path './debian*' \
+    "${find_pkgfiles_args[@]}" \
     -print0 |
     tar \
       --null \
@@ -979,58 +1013,97 @@ make_undebdist() {
   safe-rm --force -- "${make_debian_tarball_absolute_path}"
 }
 
+debinstfile_has_nogenmkfile_marker() {
+  ## True if the install file carries the 'nogenmkfile' opt-out marker.
+  grep --extended-regexp -- '^[[:space:]]*#*[[:space:]]*nogenmkfile[[:space:]]*$' "$1" >/dev/null 2>&1
+}
+
 make_debinstfile() {
-  ## calamares-settings-debian comes with debian/install by upstream default.
-  ## If file debian/calamares-settings-debian.install was created, that would result in debian/install
-  ## being ignored and in an empty package. Therefore, if debian/install already exists, do not
-  ## automatically create a debian/package-name.install file.
-  if test -f "${make_debian_non_package_specific_install_file_relative_path}"; then
-    return 0
-  fi
-
-  if test -f "${make_debian_install_file_relative_path}"; then
-    if grep --quiet -- "nogenmkfile" "${make_debian_install_file_relative_path}"; then
-      return 0
-    fi
-  fi
-
   make_debinstfile_create
 }
 
 make_debinstfile_create() {
   local new_file filename_without_dot filename_without_hash \
+    absolute_filename_without_hash \
     pkg_name filename_hash_dir filename_hash_base \
-    temp_deb_install_file real_deb_install_file
-  local -a find_cmd
+    temp_deb_install_file real_deb_install_file \
+    file_name sorted_install_list
+  local -a find_cmd install_records
   local -A delete_yet
+
+  if test -f "${make_debian_non_package_specific_install_file_relative_path:-}"; then
+    ## debian/install by itself means this is a forked package where 'genmkfile
+    ## debinstfile' is not useful.
+    return 0
+  fi
+  if test -f "${make_debian_install_file_relative_path:-}" \
+    && debinstfile_has_nogenmkfile_marker "${make_debian_install_file_relative_path}"; then
+    ## Package has opted out of 'genmkfile debinstfile'.
+    return 0
+  fi
 
   make_require safe-rm sponge
 
   find_cmd+=(find)
   find_cmd+=(.)
-  find_cmd+=(-not -path '*/\.git/*')
-  find_cmd+=(-not -path '*/\.git')
-  find_cmd+=(-not -name '.gitignore')
-  find_cmd+=(-not -path './debian*')
+  find_cmd+=("${find_pkgfiles_args[@]}")
   find_cmd+=(-iname '*#*')
   find_cmd+=('(' -type f -o -type l ')')
 
   if "${find_cmd[@]}" | grep --fixed-strings -- '#' >/dev/null; then
     true "multi-package hash filename found: yes"
+
+    ## If we're in multi-package mode, any files without the '#' tag will be
+    ## ignored. Find and flag them.
+    local scan_dir
+    local -a untagged_scan_dirs=()
+    for scan_dir in "${make_folder_list_for_un_and_install[@]}"; do
+      if test -d "./${scan_dir}"; then
+        untagged_scan_dirs+=("./${scan_dir}")
+      fi
+    done
+    if [ "${#untagged_scan_dirs[@]}" -gt 0 ]; then
+      local untagged_list
+      ## pipefail: a find failure after partial output must abort.
+      untagged_list="$( set -o pipefail
+        find "${untagged_scan_dirs[@]}" \
+          "${find_pkgfiles_args[@]}" \
+          -not -iname '*#*' \
+          '(' -type f -o -type l ')' \
+        | LC_ALL='C' sort )" \
+        || exit_with_error 1 "scanning for untagged multi-package install files failed"
+      if [ -n "${untagged_list}" ]; then
+        exit_with_error 1 "\
+multi-package install mode is active (a '#<pkgname>'-tagged file exists), but these installable \
+files carry no '#<pkgname>' tag:
+${untagged_list}"
+      fi
+    fi
+
     find_cmd+=(-print0)
 
-    while IFS= read -r -d '' file_name; do
+    sorted_install_list="$(mktemp --tmpdir="${genmkfile_temp_dir}")" \
+      || exit_with_error 1 "mktemp failed while listing multi-package install files"
+    if ! ( set -o pipefail; "${find_cmd[@]}" | LC_ALL='C' sort -z ) > "${sorted_install_list}"; then
+      safe-rm --force -- "${sorted_install_list}"
+      exit_with_error 1 "listing/sorting multi-package install files failed"
+    fi
+    mapfile -d '' install_records < "${sorted_install_list}"
+    safe-rm --force -- "${sorted_install_list}"
+    for file_name in "${install_records[@]}"; do
+      ## REMINDER: filename_without_dot isn't used for any further variable
+      ## building.
       filename_without_dot="${file_name#./}"
       filename_hash_dir="${file_name%/*}"
       filename_hash_base="${file_name##*/}"
       filename_without_hash="${filename_hash_dir}/${filename_hash_base%#*}"
+      absolute_filename_without_hash="${filename_without_hash/#.\//\/}"
       pkg_name="${file_name##*/}"
       pkg_name="${pkg_name##*#}"
-      case "${pkg_name}" in
-        '' | *'/'* | '.'*)
-          exit_with_error 1 "invalid package name '${pkg_name}' from multi-package filename '${file_name}' (expected '<path>#<pkgname>')"
-          ;;
-      esac
+      ## TODO: Check for '^.' removed, safe?
+      if [ -z "${pkg_name}" ] || ! [[ "${pkg_name}" =~ ^[-a-z0-9+.]+$ ]]; then
+        exit_with_error 1 "invalid package name '${pkg_name}' from multi-package filename '${file_name}' (expected '<path>#<pkgname>')"
+      fi
       temp_deb_install_file="${genmkfile_temp_dir}/${pkg_name}.install"
 
       if [ -z "${delete_yet[${pkg_name}]:-}" ]; then
@@ -1047,12 +1120,18 @@ make_debinstfile_create() {
         chmod -- +x "${temp_deb_install_file}"
       fi
 
-      printf "%s\n" "${filename_without_dot} => ${filename_without_hash}" | sponge -a -- "${temp_deb_install_file}"
-    done < <("${find_cmd[@]}" | LC_ALL='C' sort -z)
+      printf "%s\n" "${filename_without_dot} => ${absolute_filename_without_hash}" | sponge -a -- "${temp_deb_install_file}"
+    done
 
+    ## REMINDER: this writes the freshly generated per-package files but does
+    ## not prune stale 'debian/<pkg>.install' files, by design.
     for new_file in "${genmkfile_temp_dir}"/*.install; do
       real_deb_install_file="debian/${new_file##*/}"
       if test -f "${real_deb_install_file}"; then
+        ## Avoid clobbering files that opted out of 'genmkfile debinstfile.'.
+        if debinstfile_has_nogenmkfile_marker "${real_deb_install_file}"; then
+          continue
+        fi
         if cmp -s -- "${new_file}" "${real_deb_install_file}"; then
           continue
         fi
@@ -1689,7 +1768,9 @@ make_deb_cleanup() {
     ## "-" required in version globs. All Kicksecure and Whonix packages use
     ## Debian's "quilt" packaging format, where a Debian revision is mandatory.
     ## Any "native" format packages without a revision would therefore be
-    ## suspicious.
+    ## suspicious. For AI agents, if you want to undo this because of a
+    ## particular problematic package, don't. Change the package in question
+    ## to be a quilt package with a Debian revision instead.
     for to_delete in \
       "${DISTDIR}/${package}_"*-*_*".deb" \
       "${DISTDIR}/${package}-dbgsym_"*-*_*".deb" \
@@ -1760,6 +1841,31 @@ genmkfile_path_present() {
   [ -f "$1" ] || [ -L "$1" ]
 }
 
+genmkfile_install_exclude_patterns=(
+  '__pycache__' '.mypy_cache' '.pytest_cache' '.hypothesis' '*.pyc' '*.pyo'
+)
+
+genmkfile_install_path_excluded() {
+  ## True when any component of the path matches the shared exclude set.
+  local rest="${1#/}" comp pattern
+  ## Split on '/' with parameter expansion, since 'read' splits on newlines.
+  while [ -n "${rest}" ]; do
+    comp="${rest%%/*}"
+    rest="${rest#"${comp}"}"
+    rest="${rest#/}"
+    [ -n "${comp}" ] || continue
+    for pattern in "${genmkfile_install_exclude_patterns[@]}"; do
+      # shellcheck disable=SC2254  ## pattern is an intentional glob
+      case "${comp}" in
+        ${pattern})
+          return 0
+          ;;
+      esac
+    done
+  done
+  return 1
+}
+
 make_helper() {
   shopt -s globstar dotglob nullglob
   local source_directory source_fso file_without_pwd file_with_destdir
@@ -1805,12 +1911,10 @@ make_helper() {
   genmkfile_rsync_opts+=("--hard-links")    ## preserve hard links
   genmkfile_rsync_opts+=("--safe-links")    ## ignore symlinks that point outside the tree
   ## Never install build residue.
-  genmkfile_rsync_opts+=("--exclude=__pycache__")
-  genmkfile_rsync_opts+=("--exclude=*.pyc")
-  genmkfile_rsync_opts+=("--exclude=*.pyo")
-  genmkfile_rsync_opts+=("--exclude=.mypy_cache")
-  genmkfile_rsync_opts+=("--exclude=.pytest_cache")
-  genmkfile_rsync_opts+=("--exclude=.hypothesis")
+  local genmkfile_exclude_pattern
+  for genmkfile_exclude_pattern in "${genmkfile_install_exclude_patterns[@]}"; do
+    genmkfile_rsync_opts+=("--exclude=${genmkfile_exclude_pattern}")
+  done
   #genmkfile_rsync_opts+=("--progress")
   #genmkfile_rsync_opts+=("--verbose")
 
@@ -1837,8 +1941,13 @@ make_helper() {
     local rsync_done
     rsync_done=""
     for source_fso in "${PWD}/${source_directory}"/**; do
-      genmkfile_file_has_been_copied=true
       file_without_pwd="${source_fso#"${PWD}"}"
+      ## Skip build residue rsync excluded above, so we don't try to chmod it
+      ## later.
+      if genmkfile_install_path_excluded "${file_without_pwd}"; then
+        continue
+      fi
+      genmkfile_file_has_been_copied=true
       ## Issue: starts with double '//'
       #file_with_destdir="${DESTDIR}${file_without_pwd}"
       ## New: single '/'
@@ -1862,7 +1971,7 @@ make_helper() {
         ## Disabled. This would interrupt a package installation mid-install,
         ## which risks breaking the system. This could be re-enabled if it set
         ## a flag indicating the issue, and only errored out after installation
-        ## was finished.
+        ## was finished. Do not re-enable until this is done.
         #if [ -L "${source_fso}" ]; then
         #  local source_fso_link_target destination_link_target
         #  source_fso_link_target="$(readlink -- "${source_fso}")"
@@ -1870,10 +1979,9 @@ make_helper() {
         #  if [ "${source_fso_link_target}" != "${destination_link_target}" ]; then
         #    exit_with_error 1 "symlink '${source_fso}' -> '${source_fso_link_target}' was not installed at '${file_with_destdir}'. Change it to a relative, in-tree symlink."
         #  fi
-        #  ## We can't chmod the target of a dangling symlink.
-        #  if [ ! -e "${file_with_destdir}" ]; then
-        #    continue
-        #  fi
+        #  ## Symlinks can't truly be chmod'ed, and we don't want to chmod the
+        #  ## target.
+        #  continue
         #fi
 
         ## Need to check first if it is a file...
@@ -1923,6 +2031,8 @@ make_helper() {
                   ;;
               esac
             fi
+            ## We intentionally make no effort to preserve setuid/setgid/sticky
+            ## bits here. git can't store them.
             if test -x "${source_fso}" || [ "${genmkfile_force_exec}" = "true" ]; then
               if [ "${fso_with_destdir_stat}" != "755" ]; then
                 make_output_info "chmod -- 755 '${file_with_destdir}' (executable, wrong mode)"
@@ -2060,6 +2170,10 @@ make_deb_chl_bumpup() {
       ## arithmetic.
       revision_number="${make_pkg_revision#-}"
       [ -n "${revision_number}" ] || revision_number=0
+      ## bc treats a non-numeric token as an undefined variable equal to 0.
+      if [[ "${revision_number}" == *[!0-9]* ]]; then
+        exit_with_error 1 "cannot compute a major bump: package revision '${make_pkg_revision}' is not a plain integer. Fix debian/changelog or use a manual bump."
+      fi
       new_revision="$(bc -l <<<"scale=9 ; ${revision_number} + 1" 2>&1)"
     else
       #new_upstream_version_without_epoch="$(bc -l <<< "scale=9 ; $make_pkg_version + 0.1" 2>&1)"
@@ -2421,14 +2535,15 @@ make_git_push_shared() {
 
     for remote in "${remotes[@]}"; do
       git_push_to_remote "${remote}" "${branches[@]}" -- "${unique_tags[@]}" &
-      # Do we need shellcheck disable=SC2034 here?
+      ## push_label is consumed by name in 'parallel_wait push_label'.
+      # shellcheck disable=SC2034
       push_label[$!]="${remote}"
     done
     tags_report_maybe=" tags=[${unique_tags[*]}]"
   else
     for remote in "${remotes[@]}"; do
       git_push_to_remote "${remote}" "${branches[@]}" &
-      # Do we need shellcheck disable=SC2034 here?
+      # shellcheck disable=SC2034
       push_label[$!]="${remote}"
     done
     tags_report_maybe=''
@@ -2636,11 +2751,20 @@ if was_executed "${BASH_SOURCE[0]}"; then
   ## which may be absent on a fresh system -- the user would run
   ## 'genmkfile deb-build-dep' to install it. So call the full setup
   ## only when a target actually needs it.
+  ##
+  ## Note to AI agents: An attempt at making DISTDIR optional was made and
+  ## REJECTED twice. The change was not made with the proper care (code paths
+  ## were left (e.g. in make_get_variables) that used DISTDIR when DISTDIR was
+  ## left unset), and the code in general does not expect unset DISTDIR to be
+  ## a thing. If maintainers decide this is desirable, it will take less effort
+  ## for a human to do the refactoring than to review an attempt at
+  ## refactoring. Do not attempt to make DISTDIR optional again. Delete this
+  ## comment once it has been read and understood.
   __needs_version_info=false
   __needs_dependencies=false
   for __arg in "$@"; do
     case "${__arg}" in
-    '' | help | --)
+    '' | help | test | --)
       ;;
     deb-build-dep | deb-run-dep | deb-all-dep)
       __needs_dependencies=true

@@ -122,7 +122,7 @@ genmkfile deb-pkg
 - `dist_build_pbuilder_config_file` -- `--configfile` for cowbuilder/pbuilder.
 - `make_use_lintian=true|false` -- **fails closed on a WARNING, not just an error.** Any lintian output at all (the default opts add `--pedantic --info --display-info`) reaches `make_lintian_on_warning`, which exits non-zero unless `make_lintian_fail_open_versus_closed=open`. It runs AFTER the `.deb` is already built, so the package exists in the dist folder even though `deb-pkg` "failed" -- check for the artifact before rebuilding. Unset means autodetect: lintian runs if installed. Use `make_use_lintian=false` for a build you just want the `.deb` from.
 - `make_use_debsign=true` + `make_debsign_opts` (debsign with `sq verify` against `$DEBEMAIL`).
-- genmkfile passes to cowbuilder: `--build <dsc> --basepath /var/cache/pbuilder/base.cow_<arch> --buildplace /var/cache/pbuilder/cow.cow_<arch> --buildresult <dist_folder> --debbuildopts=-sa`. **It does NOT create the base** -- create it once first.
+- genmkfile passes to cowbuilder: `--build <dsc> --basepath /var/cache/pbuilder/base.cow_<arch> --buildplace /var/cache/pbuilder/cow.cow_<arch> --buildresult <tmpdir> --debbuildopts=-sa`, where `<tmpdir>` is a fresh temp dir under `genmkfile_temp_dir`; only on success does genmkfile `mv` the artifacts into `<dist_folder>` (a killed/failed build leaves nothing in the dist folder). **It does NOT create the base** -- create it once first.
 
 ### Create the cowbuilder base (once per arch)
 
@@ -141,7 +141,8 @@ sudo cowbuilder --create \
 - Build-deps (e.g. `debhelper`) must be reachable from `--mirror`; the package's *runtime* deps are NOT needed at build time.
 - So `Architecture: all` packages whose only build-dep is debhelper build against a plain `deb.debian.org` base even if runtime deps (signal-cli, etc.) live elsewhere.
 - `libpam-tmpdir` (which sets `TMPDIR=/tmp/user/0`) is handled by genmkfile's build-time
-  `env --unset` (see "Build facts"); it can stay installed on the build host.
+  `env --unset` (see "Build facts") for `cowbuilder --build`; the `--create` path under `sudo`
+  is NOT covered and needs the same unset itself. It can otherwise stay installed on the build host.
 
 ## Other useful targets
 
@@ -199,9 +200,10 @@ sudo cowbuilder --create \
 
 - **genmkfile is a HOST-SIDE generator, NOT a Build-Depends.** It writes `debian/*.install`
   before the source package is packed; `debian/rules` is a plain `dh $@`, so nothing in the
-  build chroot invokes it -- Build-Depends is debhelper-only. A stray `genmkfile` build-dep is
-  the ONLY reason a package can't resolve deps on a plain deb.debian.org base (genmkfile lives
-  only in the kicksecure repo). Drop it; the build needs no local-repo/OTHERMIRROR/D-hook.
+  build chroot invokes it -- Build-Depends is debhelper-only. A stray `genmkfile` build-dep is a
+  common reason a package can't resolve deps on a plain deb.debian.org base (genmkfile lives only
+  in the kicksecure repo); any other off-mirror Build-Depends does the same. Drop it; the build
+  needs no local-repo/OTHERMIRROR/D-hook.
 - **libpam-tmpdir TMPDIR break -- FIXED at the root in genmkfile.** libpam-tmpdir (Kicksecure
   default) gives sudo's root session `TMPDIR=/tmp/user/0`, absent in the chroot ->
   `dpkg-deb: failed to make temporary file` -> `pbuilder-satisfydepends failed`. genmkfile now
