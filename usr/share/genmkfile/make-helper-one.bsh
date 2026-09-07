@@ -13,9 +13,9 @@
 #set -x
 
 ## Code duplication. Copied from
-## helper-scripts//usr/libexec/helper-scripts/has.sh.
+## helper-scripts//usr/libexec/helper-scripts/has.bsh.
 ##
-## Because has.sh cannot be sources here (the build host may not have
+## Because has.bsh cannot be sources here (the build host may not have
 ## helper-scripts installed).
 has() {
   local _cmd _name
