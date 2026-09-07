@@ -15,6 +15,7 @@ set -o pipefail
 set -o errtrace
 shopt -s inherit_errexit
 shopt -s shift_verbose
+export LC_ALL=C
 
 if [ -o xtrace ]; then
   export GENMKFILE_DEBUG=1
@@ -27,6 +28,7 @@ if [ -f "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/pre.bsh ]; then
   ## 'pre.bsh' would `source` the following folders if they exist:
   ## /etc/make-helper-one.bsh_pre.d/*.conf
   ## /usr/local/etc/make-helper-one.bsh_pre.d/*.conf
+  # shellcheck source=../../../../helper-scripts/usr/libexec/helper-scripts/pre.bsh
   source "${HELPER_SCRIPTS_PATH:-}"/usr/libexec/helper-scripts/pre.bsh
 fi
 
