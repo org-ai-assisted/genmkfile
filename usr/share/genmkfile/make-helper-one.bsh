@@ -367,13 +367,12 @@ make_get_variables_parse_stanzas() {
         ## Validate the control-derived binary package name before it is
         ## interpolated into deletion paths.
         ##
-        ## TODO: Previously this check forbade packages with a name starting
-        ## with '.'. Without '/', such a package name shouldn't be able to
-        ## trigger deletion of wrong files, but double-check this is safe. The
-        ## regex here matches the restrictions on Debian package names
-        ## specified by
-        ## https://www.debian.org/doc/debian-policy/ch-controlfields.html#s-f-source.
-        if [ -z "${package}" ] || ! [[ "${package}" =~ ^[-a-z0-9+.]+$ ]]; then
+        ## Debian policy: a package name is at least two characters and MUST
+        ## start with an alphanumeric (then lower-case letters, digits, +, -, .).
+        ## Anchoring the first character rejects a name like '..' or '.x' that a
+        ## bare '[-a-z0-9+.]+' would accept and that could escape a deletion path.
+        ## https://www.debian.org/doc/debian-policy/ch-controlfields.html#s-f-source
+        if [ -z "${package}" ] || ! [[ "${package}" =~ ^[a-z0-9][a-z0-9+.-]+$ ]]; then
           exit_with_error 1 "invalid binary package name '${package}' in debian/control."
         fi
         true "package: ${package}"
@@ -429,7 +428,12 @@ make_get_variables_parse_stanzas() {
         binary_package_architecture=""
       ;;
     esac
-  done <<< "${stanza_list}"
+  ## A stanza is flushed only when the loop reads the blank line AFTER it, but
+  ## '$(grep-dctrl ...)' strips grep-dctrl's trailing blank line, so without a
+  ## re-added terminator the LAST stanza is never flushed -- dropping the .deb of
+  ## a single-binary package (empty install list -> deb-install installs nothing
+  ## -> installcheck fails) or the last binary of a multi-binary one.
+  done <<< "${stanza_list}"$'\n'
 }
 
 make_get_variables() {
