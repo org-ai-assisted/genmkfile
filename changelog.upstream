@@ -1,9 +1,737 @@
+commit 4ceece8d9ef0cccb9797be4b94b28362605fa3e9
+Merge: cbaa672 a0db9fe
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Mon Sep 7 00:25:59 2026 -0400
+
+    Merge remote-tracking branch 'refs/remotes/ArrayBolt3/arraybolt3/trixie'
+
+commit a0db9fecf4bfd82cb7798bbb9e86d0f2d0104892
+Author: Aaron Rainbolt <arraybolt3@gmail.com>
+Date:   Sun Sep 6 20:23:22 2026 -0400
+
+    Polish, undo some bad changes and leave notes as to why
+
+commit 1f19beeccd1350ce4b132dc3e457f7beaa008821
+Merge: e4dea80 fc253d7
+Author: Aaron Rainbolt <arraybolt3@gmail.com>
+Date:   Sun Sep 6 17:49:59 2026 -0400
+
+    Merge branch 'ai' into arraybolt3/trixie
+
+commit fc253d7f4b93de32225edc16f0517761aa1b3e28
+Author: claude (dev454 d84fe56f-36af-496e-aed9-0d6a9dbe9656) <noreply@anthropic.com>
+Date:   Sun Sep 6 09:54:52 2026 -0400
+
+    Clean up genmkfile_temp_dir on every exit path
+
+    make_init now sets an EXIT trap (genmkfile_temp_dir_cleanup) removing the temp
+    dir, so an error exit (which never reaches make_deinit under errexit) no longer
+    leaks one 'mktemp --directory' per failed run. Idempotent with make_deinit;
+    subshells reset the trap so it never fires mid-run.
+
+commit ecc54dfc5199cbf6cad6424be74f0da24433e97f
+Author: claude (dev454 d84fe56f-36af-496e-aed9-0d6a9dbe9656) <noreply@anthropic.com>
+Date:   Sun Sep 6 09:47:39 2026 -0400
+
+    Correct SKILL.md cowbuilder --buildresult wording
+
+    cowbuilder writes to a temp dir; genmkfile moves the artifacts into the dist
+    folder only on success.
+
+commit 2e991ae4b30a58be09eba3bbba9b8942c7e856ff
+Author: claude (dev454 d84fe56f-36af-496e-aed9-0d6a9dbe9656) <noreply@anthropic.com>
+Date:   Sun Sep 6 09:47:32 2026 -0400
+
+    Harden install residue skip and make_dist debian exclusion
+
+    - install skip: split the path with parameter expansion, not 'read' (which stops
+      at the first newline), so a residue name containing a newline is still excluded
+      and never reaches the mode-fix 'stat' that would abort under errexit.
+    - make_dist: exclude only './debian' and its contents, not sibling 'debian*'
+      names (a 'debianrc' file, a 'debian-notes/' dir) -- matching the fix already in
+      make_debinstfile_create; align the empty-directory guard with the tar find so
+      an empty dir under debian/ (never tarred) does not abort 'genmkfile dist'.
+
+commit f6f479a99ee8af4c8b5860b3b6a0fc2b3baca172
+Author: claude (dev454 d84fe56f-36af-496e-aed9-0d6a9dbe9656) <noreply@anthropic.com>
+Date:   Sun Sep 6 09:20:35 2026 -0400
+
+    Document accepted dispatch and stale-install limitations
+
+    - make_parse_cmd: any make_* function is dispatchable (no public/internal
+      allowlist); public targets are what make_help documents -- invoking an internal
+      target is unsupported and may misbehave (accepted, ruled not worth a gate).
+    - make_debinstfile_create: a stale debian/<pkg>.install from a renamed/removed
+      '#<pkgname>' tag is not auto-pruned (rare; maintainer removes by hand).
+
+commit 527a4fc238272fbd6e40fe49cfb928a2394e31e6
+Author: claude (dev454 d84fe56f-36af-496e-aed9-0d6a9dbe9656) <noreply@anthropic.com>
+Date:   Sun Sep 6 08:24:36 2026 -0400
+
+    Scope SKILL.md TMPDIR and build-dep claims
+
+    - The build-time env --unset covers cowbuilder --build only; note --create under
+      sudo still needs it.
+    - genmkfile is not the ONLY off-mirror Build-Depends that can fail to resolve;
+      soften the claim.
+
+commit 189b0667e8ce1fd5e404fe212b0142dce87d293f
+Author: claude (dev454 d84fe56f-36af-496e-aed9-0d6a9dbe9656) <noreply@anthropic.com>
+Date:   Sun Sep 6 08:24:20 2026 -0400
+
+    Skip build-residue paths in the install loop
+
+    - rsync --exclude drops __pycache__/*.pyc/*.pyo/.mypy_cache/.pytest_cache/
+      .hypothesis, but the whole-tree install loop still visited those entries and
+      ran 'stat' on a dest rsync never created -> abort under errexit on any tree
+      with a bytecode/tooling cache (the exact case the excludes exist for).
+    - One shared pattern list (genmkfile_install_exclude_patterns) now feeds both
+      the rsync opts and the loop skip, so they cannot drift.
+
+commit dbb007bddfb2b4660215d2fc6b92c423cb621ad7
+Author: claude (dev441 a7e40dad-3567-4fed-8b6c-4108b5941274) <noreply@anthropic.com>
+Date:   Sat Sep 5 23:45:42 2026 -0400
+
+    Fail closed on untagged file in multi-package mode
+
+    The first '#<pkg>'-tag flips a source into multi-package routing where an
+    untagged installable file matches nothing and is dropped from every .deb --
+    a green build shipping an incomplete package. Refuse and name each file.
+
+commit ca8767379744aedea8a1f55a5114fa84154f9b09
+Author: claude (dev424 a62e2595-d8fe-4213-af32-c611a79e91a1) <noreply@anthropic.com>
+Date:   Sat Sep 5 02:31:27 2026 -0400
+
+    Declare bc dependency (changelog revision bump)
+
+    make_deb_chl_bumpup requires bc alongside the already-declared debchange; add
+    it to Depends and to the dist-ai CI apt list so the chl_bumpup suite stops
+    FATAL-ing on a missing tool.
+
+commit 409072c898cc8a3feb0b573a2699000f2e532a75
+Author: claude (dev424 a62e2595-d8fe-4213-af32-c611a79e91a1) <noreply@anthropic.com>
+Date:   Sat Sep 5 02:31:11 2026 -0400
+
+    Exempt pure git ops from distdir and changelog setup
+
+    git-push must run in a non-package repo (no debian/control, changelog, or
+    cowbuilder folder); the trixie refactor routed it through make_get_distdir
+    and make_get_variables, aborting on the missing changelog. Gate both at the
+    dispatcher: no git target reads DISTDIR, and only tag/verify ops need the
+    package vars.
+
+commit 617971d1a2086099fac66f145e6b4b76c878b1bd
+Merge: c21498a 1372314
+Author: claude (dev424 a62e2595-d8fe-4213-af32-c611a79e91a1) <noreply@anthropic.com>
+Date:   Sat Sep 5 02:19:37 2026 -0400
+
+    Merge remote-tracking branch 'org-ai-assisted/master' into ai
+
+commit 137231479f101e6334fd79fcf72e48b1bc3612e7
+Merge: cbaa672 e4dea80
+Author: claude (dev424 a62e2595-d8fe-4213-af32-c611a79e91a1) <noreply@anthropic.com>
+Date:   Sat Sep 5 02:10:26 2026 -0400
+
+    Merge arraybolt3/trixie (Polish and refactor) into master
+
+    - adopt ArrayBolt3's make-helper-one.bsh refactor as the base; our
+      fixes ride the ai PR on top, keeping that PR to just our own work
+
+commit c21498a9ad6fdc0345e7cc8f4bce5c72009154a3
+Author: claude (dev424 a62e2595-d8fe-4213-af32-c611a79e91a1) <noreply@anthropic.com>
+Date:   Sat Sep 5 01:56:22 2026 -0400
+
+    genmkfile: reconcile make_helper mode-fix (ai-review)
+
+    - skip the mode-fix for a symlink source entirely: 'stat %a' on a
+      symlink is 0777 and 'chmod' follows it, so processing an in-tree
+      alias rewrote the TARGET's mode (e.g. loosening a skip-list 0600
+      file, or stripping a setuid)
+    - normalise to the source-declared mode instead of preserving a stale
+      destination setuid: git cannot declare setuid, so keeping a stale one
+      left an updated 0755 binary silently setuid-root (privilege
+      escalation); maintainer scripts re-apply special bits, not genmkfile
+    - rename the internal 'nogenmkfile' marker helper off the 'make_'
+      prefix so the target dispatcher no longer exposes it (it crashed on
+      '$1: unbound variable')
+
+commit a142e397550ddc8f956b12456383f1910d0e4fe9
+Author: claude (dev424 a62e2595-d8fe-4213-af32-c611a79e91a1) <noreply@anthropic.com>
+Date:   Sat Sep 5 01:21:05 2026 -0400
+
+    genmkfile: re-derive parse-stanza abort + safe-links guard
+
+    - make_get_variables_parse_stanzas: capture grep-dctrl via a temp with
+      an explicit rc check, not '< <(...)' which hid a malformed-control
+      failure and parsed a partial stanza list
+    - make_helper: restore the rsync --safe-links guard (was commented
+      out) so an escaping symlink fails loud with a clear message instead
+      of crashing 'stat' on the dropped destination
+
+commit e5d0960541aea4a7cfe8ac089ee513056d4d655e
+Author: claude (dev424 a62e2595-d8fe-4213-af32-c611a79e91a1) <noreply@anthropic.com>
+Date:   Sat Sep 5 00:40:56 2026 -0400
+
+    genmkfile: re-derive deb-cleanup globs + debinstfile sort-abort
+
+    - deb-cleanup: drop the '-' (revision) requirement from the artifact
+      globs -- the orig tarball is '<pkg>_<version>.orig.tar.xz' with no
+      revision, so requiring a hyphen left every orig tarball (and native
+      artifacts) behind
+    - make_debinstfile_create: capture 'find | sort' via a temp with an
+      explicit rc check instead of '< <(...)', which hid the producer's
+      exit status (a sort failure would ship a partial .install as success)
+
+commit c1ae0b29bc1458ed945271e94cc028d1b7a0fae3
+Author: claude (dev424 a62e2595-d8fe-4213-af32-c611a79e91a1) <noreply@anthropic.com>
+Date:   Sat Sep 5 00:30:15 2026 -0400
+
+    genmkfile: preserve setuid/setgid/sticky in make_helper mode-fix
+
+    - rsync runs without --perms, so a re-install kept an existing dest
+      file's mode; the mode-fix then did a bare 'chmod 755'/'644' which
+      stripped setuid/setgid/sticky. Compare/fix only the low 3 octal
+      digits and keep the high bit (e.g. chmod 4755, not 755)
+
+commit 2568cfc3444882bd956b2d50a7244ea185cb1316
+Author: claude (dev424 a62e2595-d8fe-4213-af32-c611a79e91a1) <noreply@anthropic.com>
+Date:   Sat Sep 5 00:24:52 2026 -0400
+
+    genmkfile: run targets after a literal '--'
+
+    - make_parse_cmd broke the loop on '--', so 'genmkfile -- install'
+      silently ran make_all instead of make_install; treat everything
+      after '--' as a target (end-of-options)
+
+commit 71160dc6c96e928c1e16bc44c1a014a5517a479d
+Author: claude (dev424 a62e2595-d8fe-4213-af32-c611a79e91a1) <noreply@anthropic.com>
+Date:   Sat Sep 5 00:21:45 2026 -0400
+
+    genmkfile: re-derive non-integer revision bump guard
+
+    - validate a plain-integer revision before bc in make_deb_chl_bumpup;
+      a non-integer ('1.0-rc1' -> 'rc1') was silently bumped to '1.0-1'
+
+commit fd40b4e99c4430965cccc8f3f9585e6a8e540523
+Author: claude (dev424 a62e2595-d8fe-4213-af32-c611a79e91a1) <noreply@anthropic.com>
+Date:   Sat Sep 5 00:20:37 2026 -0400
+
+    genmkfile: re-derive debinstfile fixes onto the refactor
+
+    - restore the per-target 'nogenmkfile' opt-out in the multi-package
+      loop (data loss: it clobbered every differing binary .install)
+    - enforce the opt-out guards in make_debinstfile_create too, so a
+      direct 'debinstfile-create' cannot bypass them; whole-line marker
+      match (a path containing the token no longer freezes updates)
+    - emit the dest as an absolute '/usr/...' path, matching all 153
+      committed .install mappings (the refactor left a './'-relative form)
+    - scope the find exclusion to ./debian + ./debian/*, not './debian*'
+    - validate a control-derived binary package name before it reaches
+      deb-clean/deb-cleanup deletion paths
+    - fix merged trixie lint debt (SC2215 dep-filter '\', LC_ALL 7th
+      strict directive, dead 'continuation' var, SC2154/SC2034 false-pos)
+
+commit c2648e68d691d60a5ffbdd127831e21bc697a509
+Merge: a03b2b7 e4dea80
+Author: claude (dev424 a62e2595-d8fe-4213-af32-c611a79e91a1) <noreply@anthropic.com>
+Date:   Sat Sep 5 00:02:03 2026 -0400
+
+    Merge arraybolt3/trixie (Polish and refactor) into ai
+
+    - adopt ArrayBolt3's make-helper-one.bsh refactor as the base; our
+      fixes + the new findings are re-derived on top as follow-up commits
+    - ALLOW_STYLE_COMMIT: the contributor branch carries WIP style/lint
+      debt (and an SC2215 dep-filter bug), cleaned up in the follow-ups
+
+commit a03b2b76d48d36e68a87dd9dd07db00881a65ac4
+Author: claude (dev424 a62e2595-d8fe-4213-af32-c611a79e91a1) <noreply@anthropic.com>
+Date:   Fri Sep 4 10:55:17 2026 -0400
+
+    genmkfile: fail loud on non-integer revision in major bump
+
+    - bc treats a non-numeric revision as 0 (exit 0, no error text), so a
+      version like '1.0-rc1' silently bumped to '1.0-1', dropping 'rc1',
+      past the '*error*' guard. validate a plain-integer revision first
+
+commit df55bb65cbaa1c43a2817cdd0a36d12af470a29b
+Author: claude (dev424 a62e2595-d8fe-4213-af32-c611a79e91a1) <noreply@anthropic.com>
+Date:   Fri Sep 4 10:31:34 2026 -0400
+
+    genmkfile: tighten debian/ exclude + validate control pkg name
+
+    - '-not -path ./debian*' also excluded siblings like 'debian-notes/'
+      and 'debianrc' from the dist tarball and the multi-package find;
+      scope it to './debian' + './debian/*'
+    - validate a control-derived binary package name (reject '/' or a
+      leading '.') before it reaches deb-clean/deb-cleanup's
+      'safe-rm -r debian/<pkg>' + DISTDIR globs -- exact mirror of the
+      '#pkgname' guard; first-party control today, so defence-in-depth
+
+commit f0e61a047510f479f83766a569456b8203467db6
+Author: claude (dev424 a62e2595-d8fe-4213-af32-c611a79e91a1) <noreply@anthropic.com>
+Date:   Fri Sep 4 09:43:43 2026 -0400
+
+    genmkfile: normalize folded Package: continuation
+
+    - mirror the Architecture: stanza-boundary blank-strip for Package:
+      (grep-dctrl emits a folded 'Package:' as 'Package: ' + continuation);
+      unnormalized it left a leading blank in make_package_list (reprepro
+      remove/removesrc, deb-cleanup) and the expected .deb name
+    - normalize BEFORE the emptiness guard: a blank-only Package: is
+      skipped, never committed as an empty name -- an empty name makes
+      deb-clean/deb-cleanup operate on 'debian/' itself
+    - reset the accumulator when skipping such a stanza, so its
+      Architecture cannot leak into the next stanza
+
+commit 93210659a8c0d68abffb9c63a44f6c0a46eadecd
+Author: claude (dev424 a62e2595-d8fe-4213-af32-c611a79e91a1) <noreply@anthropic.com>
+Date:   Fri Sep 4 08:54:07 2026 -0400
+
+    genmkfile: honor nogenmkfile opt-out per install file
+
+    - multi-package loop clobbered every differing binary-package
+      .install, silently losing a maintainer's hand-written nogenmkfile
+      content; only debian/<source-pkg>.install was guarded
+    - match the marker as a whole line ('nogenmkfile' or '## nogenmkfile'),
+      not any substring, so a generated 'SOURCE => DEST' mapping whose path
+      contains the token cannot falsely freeze future updates. one helper,
+      both guards
+
+commit e4dea80eb50f93443d66a110670a11b497226f42
+Author: Aaron Rainbolt <arraybolt3@gmail.com>
+Date:   Thu Sep 3 22:15:59 2026 -0400
+
+    Polish and refactor
+
+commit 4169ec02bc220f61772ed024cc48f46518df3b88
+Author: claude (dev398 81507c04-79a4-4eef-9538-c396044dcb7b) <noreply@anthropic.com>
+Date:   Wed Sep 2 03:13:21 2026 -0400
+
+    genmkfile: force dpkg-architecture to honor the target arch (-f)
+
+    dpkg-architecture ignores -a when DEB_HOST_ARCH is already set in the env
+    (a cross-build, or after 'eval $(dpkg-architecture -s)'), so the wildcard
+    match read the ENV arch not ${target} -- dropping a covered .deb or
+    inventing one dpkg-buildpackage never builds. Add -f.
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit bdf673cad541d0f1c3a153d370041c7291e8b36a
+Author: claude (dev398 81507c04-79a4-4eef-9538-c396044dcb7b) <noreply@anthropic.com>
+Date:   Wed Sep 2 02:17:37 2026 -0400
+
+    genmkfile: fix ai-review findings (control parse + dispatch guards)
+
+    - parse_control_package_stanzas: capture grep-dctrl with an explicit rc
+      check; a malformed control silently dropped the remaining binary
+      packages via a process-sub that swallowed grep-dctrl's non-zero exit.
+    - rename it off the make_* namespace so make_parse_cmd cannot dispatch it
+      as a bogus CLI target (it would double-append the build arrays).
+    - make_debinstfile_create: enforce the debian/install + nogenmkfile
+      overwrite guards HERE, so a direct 'debinstfile-create' cannot bypass
+      them and clobber a hand-maintained install file.
+    - make_architecture_covers_target: match via 'dpkg-architecture -i' so an
+      'any-<cpu>' wildcard (e.g. any-arm covering armhf) is not dropped.
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit 873dd79eaf0068aecb5cbdbe1bb212fff81d6fbe
+Author: claude (dev398 81507c04-79a4-4eef-9538-c396044dcb7b) <noreply@anthropic.com>
+Date:   Wed Sep 2 00:07:18 2026 -0400
+
+    genmkfile: keep the LOCAL tracking-ref push-skip (zero round-trip)
+
+    Reverts the ls-remote / just-push detour. The point of the skip is ZERO
+    network calls when up to date: a many-repo push loop (e.g.
+    dm-packaging-helper-script) must not open a connection per remote just to
+    learn there is nothing to push, or it risks a rate-limit ban. The stale
+    tracking ref after a url-repoint is an accepted tradeoff, now documented
+    so it is not "fixed" with ls-remote again.
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit 885f6a019633043fa9c5174308395b1c51336648
+Author: claude (dev398 81507c04-79a4-4eef-9538-c396044dcb7b) <noreply@anthropic.com>
+Date:   Tue Sep 1 23:56:58 2026 -0400
+
+    genmkfile: push branches unconditionally (dm model), no tip pre-check
+
+    git push already no-ops cheaply when a remote is current, so the branch
+    tip pre-check was pure downside: a local tracking ref went stale
+    (url-repoint / peer push) and skipped a needed push; an ls-remote
+    pre-check adds a round-trip before the push. Match dm-packaging-helper
+    -script's unsigned push -- just push. Immutable tags stay locally cached.
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit 4527418de3bf61cbfa3ec5727e5de0da81fba008
+Author: claude (dev398 81507c04-79a4-4eef-9538-c396044dcb7b) <noreply@anthropic.com>
+Date:   Tue Sep 1 23:42:54 2026 -0400
+
+    genmkfile: match the remote branch ref exactly in push-skip
+
+    ls-remote refspec patterns tail-match, so a decoy ref ending in
+    /refs/heads/<branch> (e.g. a filter-branch refs/original leftover) also
+    returns; NR==1 could read the decoy's sha and re-skip a needed push.
+    Match field 2 == refs/heads/<branch>.
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit ce74b875de95feee114270193f12ddde9db103df
+Author: claude (dev398 81507c04-79a4-4eef-9538-c396044dcb7b) <noreply@anthropic.com>
+Date:   Tue Sep 1 22:12:52 2026 -0400
+
+    genmkfile: honest push-skip and debinstfile producer
+
+    - git_push_to_remote: decide "already at remote tip" from ls-remote, not
+      the local tracking ref -- a stale ref (repointed url / never fetched)
+      skipped a push the remote still needed, reporting a phantom success.
+    - make_debinstfile_create: build the file list with an explicit rc check
+      (pipefail subshell + temp), not process substitution whose producer
+      failure was invisible -> a failing find|sort yielded a partial .install.
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit 1ceb9bb1bd390def6b3ef3a1e332a92e1b2454fe
+Merge: 5aafc8b 316fd69
+Author: Aaron Rainbolt <arraybolt3@gmail.com>
+Date:   Tue Sep 1 22:11:56 2026 -0400
+
+    Merge branch 'ai' into arraybolt3/trixie
+
+commit 316fd69daa7b14f5b5118bbbddcecb512ad02797
+Author: claude (dev398 81507c04-79a4-4eef-9538-c396044dcb7b) <noreply@anthropic.com>
+Date:   Tue Sep 1 15:55:04 2026 -0400
+
+    genmkfile: extract control-stanza parse loop into a function
+
+    make_get_variables' inline stanza loop needed test-only sentinel markers
+    to drive it. Move it to make_get_variables_parse_stanzas: the file is
+    sourceable, so genmkfile-tests source and call it directly, no markers.
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit d455102b4bb35a271e8442507a2cec43a557fecd
+Author: claude (dev398 81507c04-79a4-4eef-9538-c396044dcb7b) <noreply@anthropic.com>
+Date:   Tue Sep 1 13:29:53 2026 -0400
+
+    genmkfile: fail loud on bad target/install name
+
+    - unknown FIRST target: die, never exec it as a shell command
+    - debinstfile validation runs in-shell (process sub, not a pipe
+      subshell) so a bad package name aborts, not silently skips files
+    - install dest + pkg name from the basename only: a '#' in a parent
+      dir no longer truncates the dest; '#'-named dirs are not entries
+    - make_git_*_push: fold newlines so a multi-line remotes/branches
+      value is not silently cut to line 1
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit 70af301ec925829b2c3d708a96d482a42466772a
+Author: claude (dev398 81507c04-79a4-4eef-9538-c396044dcb7b) <noreply@anthropic.com>
+Date:   Tue Sep 1 12:51:08 2026 -0400
+
+    git-push: fix two regressions from the cowbuilder-gate generalization
+
+    ai-review (grok, coderabbit) found two regressions in the target classifier:
+    - the '' / '--' argv arm was dropped, so `genmkfile git-push --` (or "") fell to
+      the default and ran make_get_variables, aborting in a non-package repo
+    - the DISTDIR exists/writable check ran for enforce=false targets on '../', so a
+      git-tag-* / deb-*-dep with a read-only package parent aborted though it never
+      writes there; gate the check on enforce
+    Both canary-fail on the pre-fix code.
+
+commit 893f4ff0336733ab6476607c29cd77b578f32470
+Merge: dcb848b cbaa672
+Author: claude (dev398 81507c04-79a4-4eef-9538-c396044dcb7b) <noreply@anthropic.com>
+Date:   Tue Sep 1 12:32:35 2026 -0400
+
+    Merge master into ai (remaster: shrink PR diff to our work)
+
+commit dcb848bb5f7045fb48773ebc14ecb1258f00c39a
+Author: claude (dev398 81507c04-79a4-4eef-9538-c396044dcb7b) <noreply@anthropic.com>
+Date:   Tue Sep 1 12:12:11 2026 -0400
+
+    rename die() to exit_with_error()
+
+    genmkfile's die() shadowed helper-scripts log_run_die.sh's die(); rename it
+    (definition + 52 call sites) so the name no longer collides. Behaviour
+    unchanged.
+
+commit 44a1296aa5b52bbda1d001cb5084dbe523be9217
+Author: claude (dev398 81507c04-79a4-4eef-9538-c396044dcb7b) <noreply@anthropic.com>
+Date:   Tue Sep 1 12:07:21 2026 -0400
+
+    drop repo-wide .shellcheckrc; handle shellcheck inline
+
+    Move SC1091/SC2154/SC2034 out of a hidden repo-wide config into the scripts:
+    - relative `# shellcheck source=` to the sibling helper-scripts (R-080), the
+      followable form the gate wants (dm-consumer.yml already opts in)
+    - disable=SC1091 + an allow-sc1091-disable waiver for the optional per-project
+      make-helper-overrides hooks (genuinely absent in an isolated checkout)
+    - disable=SC2154 where first_arch/parallel_failures come from the entrypoint /
+      parallel.bsh; disable=SC2034 at the push_label nameref assignment and the
+      externally-consumed control-file path
+    Also adds the missing LC_ALL=C to make-helper.bsh (R-010).
+
+commit 4454b70901491098745ab454f7ef634934b82648
+Author: claude (dev398 81507c04-79a4-4eef-9538-c396044dcb7b) <noreply@anthropic.com>
+Date:   Tue Sep 1 11:42:20 2026 -0400
+
+    git-push: generalize -- enforce cowbuilder only for build/dist targets
+
+    Extends the narrow git-push exemption to the principle: a non-cowbuilder action
+    must not demand cowbuilder config.
+    - make_get_distdir gates the make_cowbuilder_dist_folder requirement on a new
+      make_enforce_cowbuilder_distdir flag (default true, backward compatible)
+    - the dispatcher sets it false for the non-dist targets: git-push/help/test skip
+      DISTDIR entirely; the git-tag-* / git-verify family still parses version info
+      (make_source_package_name) but no longer demands the cowbuilder folder; every
+      real build/dist target keeps enforcing it
+
+commit 2c8ee58e8043f5651f6466d065dfba2416bc859d
+Author: claude (dev398 81507c04-79a4-4eef-9538-c396044dcb7b) <noreply@anthropic.com>
+Date:   Tue Sep 1 11:06:26 2026 -0400
+
+    git-push: skip DISTDIR/DESTDIR setup, not just make_get_variables
+
+    git-push ran make_get_distdir/make_get_destdir unconditionally, and
+    make_get_distdir aborts under make_use_cowbuilder=true without
+    make_cowbuilder_dist_folder -- so git-push tripped on cowbuilder config in a
+    build shell though it needs no DISTDIR. Gate those on the target too.
+
+commit 145c125466b15f92663792ce56822c796195d694
+Author: claude (dev398 81507c04-79a4-4eef-9538-c396044dcb7b) <noreply@anthropic.com>
+Date:   Tue Sep 1 07:52:23 2026 -0400
+
+    add tag-less git-push target
+
+    - unsigned dev/backup pushes need no signed tag at tip, unlike git-tag-push
+    - reuses git_push_to_remote (renamed from git_tag_push_to_remote, fixing its
+      FIXME): skips a remote already at the local tip, so re-runs never hammer
+    - exempt from make_get_variables so it runs in any repo, not only a package
+
+commit 59baddc4a9b9b763aac569eb958548efb67309bc
+Author: claude (dev384 a855591b-402f-45d1-ac7f-384898a4b330) <noreply@anthropic.com>
+Date:   Sun Aug 30 12:09:17 2026 -0400
+
+    make-helper-one: error on unrecognized target, clearer lintian
+
+    - make_parse_cmd silently dropped an unrecognized target that followed a
+      valid one ('install deb-cleanuptypo' installed + reported success while
+      skipping the typo'd target); it now fails loud. Valid multi-target runs
+      and 'all' arg-forwarding are unaffected.
+    - the lintian fail-closed message now explains it aborts on ANY output
+      (the default --info/--display-info opts emit informational notes too) and
+      lists the make_lintian_fail_open_versus_closed / make_use_lintian knobs.
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit 798a016877ce772ee84e71771bec88fa2dff4a79
+Author: claude (dev384 a855591b-402f-45d1-ac7f-384898a4b330) <noreply@anthropic.com>
+Date:   Sun Aug 30 11:49:15 2026 -0400
+
+    make-helper-one: reject dot-prefixed debinstfile pkg name
+
+    - a leading-dot package name (foo#.evil) would have its .install silently dropped by the non-dotglob glob (ai-review coderabbit)
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit 5b3995715ef26e9abf00c2f92c63f30b89d11aa0
+Author: claude (dev384 a855591b-402f-45d1-ac7f-384898a4b330) <noreply@anthropic.com>
+Date:   Sun Aug 30 11:30:02 2026 -0400
+
+    make-helper-one: install/parse safety fixes
+
+    - debinstfile: derive the package name from the BASENAME's last hash, not the
+      first hash in the whole path -- a parent dir like 'x#..' escaped the temp dir
+      (arbitrary root file write/delete); validate the name too
+    - install: activate the symlink guard so a safe-links-dropped escaping symlink
+      fails loud instead of a cryptic stat crash; skip a dangling in-tree symlink
+    - dep filter: alternative bar becomes a space (space-less A-bar-B no longer
+      becomes AB); strip build-profile and substvar markers; bare Architecture:
+      still associates its folded value
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit a27293c51a8d17dbe486b71891ab73ccd25fcfc4
+Author: claude (dev384 a855591b-402f-45d1-ac7f-384898a4b330) <noreply@anthropic.com>
+Date:   Sun Aug 30 10:35:21 2026 -0400
+
+    make-helper-one: keep dep filter flat, drop alt-parsing
+
+    - reducing 'A | B' to the first alternative in bash reliably regressed one
+      of: multi-stanza splitting, fold-anywhere, arch/build-profile quals, glob
+      in unquoted expansion -- a real Debian-dep parser is needed, so keep the
+      original flat filter (both alternatives) per the no-bash-parser rule
+    - the folded-Architecture fix (append continuations + trim) stays
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit c0ec7d99c08e3b4eea9bf7768d8c31b23955ad58
+Author: claude (dev384 a855591b-402f-45d1-ac7f-384898a4b330) <noreply@anthropic.com>
+Date:   Sun Aug 30 10:20:06 2026 -0400
+
+    make-helper-one: dep-filter multi-stanza + arch-alt + folded-all
+
+    - split deps on commas AND newlines: grep-dctrl separates per-binary-stanza
+      Depends by newline (no comma), so folding-then-comma-split dropped packages
+    - an arch-qualified alternative group keeps ALL alternatives (position choice
+      could pick the wrong-arch one and break the build); plain groups keep first
+    - a folded 'Architecture:<nl> all' (leading space) is trimmed before '= all'
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit a7d597c746e99acc68df8d9a79b3ad5f4cf386db
+Author: claude (dev384 a855591b-402f-45d1-ac7f-384898a4b330) <noreply@anthropic.com>
+Date:   Sun Aug 30 09:54:31 2026 -0400
+
+    make-helper-one: fix alternative-dep + folded-field parsing
+
+    - make_dependencies_filter_helper turned 'A | B' into hard deps on BOTH; keep
+      only the first alternative (they are often mutually exclusive)
+    - the Package/Architecture stanza loop dropped RFC822 folded continuation
+      lines, so a multi-line Architecture lost every arch after the first ->
+      covered target read as uncovered, its .deb missing from the expected list
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit fe0f6597c13061d7a811687abd5bee1b34c87df3
+Author: claude (dev384 a855591b-402f-45d1-ac7f-384898a4b330) <noreply@anthropic.com>
+Date:   Sat Aug 29 22:27:53 2026 -0400
+
+    make-helper-one: die clamps exit code to 1..255
+
+    - a fatal die must never report success: non-numeric, 0, or a value 'exit'
+      wraps mod 256 to 0 now falls back to 1 (ai-review: die 0 exited 0)
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit c5779dc3b32d3298256e8879862667a62e9f7dd5
+Author: claude (dev384 a855591b-402f-45d1-ac7f-384898a4b330) <noreply@anthropic.com>
+Date:   Sat Aug 29 22:17:27 2026 -0400
+
+    make-helper-one: die honours exit code, drop leaked arg
+
+    - every call site is 'die <code> <msg>'; without a shift the code leaked
+      into the message as 'ERROR: <code> <msg>' and the exit was hardcoded 1
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit be3e83e80ec6be83600d327ffc867909bcbe0913
+Author: claude (dev384 a855591b-402f-45d1-ac7f-384898a4b330) <noreply@anthropic.com>
+Date:   Sat Aug 29 11:22:59 2026 -0400
+
+    Revert no-op aptcache/partial mkdir (dbab822)
+
+    - pbuilder hardlinks APTCACHE *.deb into the chroot (recover_aptcache,
+      find -maxdepth 1) and never bind-mounts it; default BINDMOUNTS is empty
+    - so the shared aptcache/partial is never the dir apt writes to; the mkdir
+      fixed nothing and followed a symlink under caller-set cowbuilder_cache_dir
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit dbab822083bc68f1a038aef30906e0b007c803a4
+Author: claude (dev384 a855591b-402f-45d1-ac7f-384898a4b330) <noreply@anthropic.com>
+Date:   Sat Aug 29 11:07:32 2026 -0400
+
+    make-helper-one: ensure aptcache partial dir exists
+
+    - pbuilder shadows chroot apt archives with the shared aptcache; a missing
+      partial/ fails every download -> pbuilder-satisfydepends aborts pre-build
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit df4982b197e87a55ef3377a6f319280d2f3f4f00
+Author: claude (dev384 a855591b-402f-45d1-ac7f-384898a4b330) <noreply@anthropic.com>
+Date:   Sat Aug 29 11:07:12 2026 -0400
+
+    Add .shellcheckrc for sourced-global false positives
+
+    - gate reads the rc from each repo's OWN tree; genmkfile lacked one, so
+      make-helper-one tripped SC2154/SC2034 on cross-file globals and namerefs
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit 27a55fb1213e3673a9432b3dc417d529916ea6e0
+Author: claude (dev374 fcd80c31-bfc3-47cf-8306-c421131f3517) <noreply@anthropic.com>
+Date:   Sat Aug 29 09:04:35 2026 -0400
+
+    Exclude bytecode/cache cruft from install rsync
+
+    make install does not run make_strip_build_residue (only the deb cleanup
+    path does), so a source tree that accumulated __pycache__/*.pyc/.mypy_cache
+    etc. rsync'd that cruft straight into the install target -- wrong for a
+    package that ships .py with -B and never wants .pyc. Exclude the same set
+    the strip removes.
+
+commit a888b734ca9717f90e6f7d60f2c0c043499063c8
+Author: claude (dev371 3fff1819-b77d-4dde-be19-8c01e09d3394) <noreply@anthropic.com>
+Date:   Fri Aug 28 01:23:29 2026 -0400
+
+    lintian: suppress maintainer-script-ignores-errors globally
+
+    House style (R-010) mandates 'set -o errexit', which lintian's 'set -e'-only matcher cannot recognize; every strict-preamble maintainer script tripped a false positive.
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit cbaa672be8d7b4a6fada37b7e4c73f067c88585f
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Wed Aug 26 07:57:08 2026 +0000
+
+    bumped changelog version
+
+commit 9c75cd8da21ac1d091e023b1ba7beef2e49038a9
+Author: claude (dev346 4f6863a2-6812-49b5-ab88-6cd6e23bdfd3) <noreply@anthropic.com>
+Date:   Tue Aug 25 13:27:46 2026 -0400
+
+    make-helper-one: skip --configfile when unreadable
+
+    - a caller may point dist_build_pbuilder_config_file at the dm-generated
+      ~/derivative-binary/pbuilder.conf, which exists only after a dm build ran
+    - pass --configfile only when the file is readable, so pbuilder does not
+      abort sourcing a missing path; lets a standalone build drop an
+      always-present wrapper configfile
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit 016188d16c19a3f8e464704f1329572dd98af093
+Author: claude (dev346 4f6863a2-6812-49b5-ab88-6cd6e23bdfd3) <noreply@anthropic.com>
+Date:   Tue Aug 25 13:27:03 2026 -0400
+
+    make-helper-one: waive R-212 --allow-downgrades
+
+    - installing build-deps may need a downgrade to a pinned/frozen version;
+      deliberate, not the vulnerability-introducing use R-212 targets
+    - file-wide style-ok waiver so the touched file passes the dist-ai gate
+
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
 commit 898ce451405bf3e4b7507fad88bf5a4f6913f822
 Merge: 4765659 225d8e3
 Author: Patrick Schleizer <adrelanos@whonix.org>
 Date:   Tue Aug 25 09:43:48 2026 -0400
 
     Merge remote-tracking branch 'refs/remotes/org-ai-assisted/ai'
+
+commit 98f184304bc47f6c91d2d0aaaee2dc32500afd20
+Author: claude (dev337 e6f5fc13-8754-4e51-bc29-817b03722280) <noreply@anthropic.com>
+Date:   Tue Aug 25 07:42:03 2026 -0400
+
+    skill: correct stale libpam-tmpdir TMPDIR fix status
+
+commit 56befa273ec092bf145a16eb9c4b76e38314209b
+Merge: 7b116cf 225d8e3
+Author: claude (dev334 bfc02b48-7559-4372-b6ea-39bd596f2fe0) <noreply@anthropic.com>
+Date:   Tue Aug 25 05:45:15 2026 -0400
+
+    Merge org-ai-assisted/ai
+
+commit 7b116cf642364700b306455fd1d483cbfccd9623
+Author: claude (dev334 bfc02b48-7559-4372-b6ea-39bd596f2fe0) <noreply@anthropic.com>
+Date:   Tue Aug 25 05:44:18 2026 -0400
+
+    genmkfile skill: fold host-gen/TMPDIR/changelog facts
 
 commit 225d8e369f432efad42473e102721e69b2ff8e87
 Author: assisted-by-ai (Bot Account) (Machine Account) <228987186+assisted-by-ai@users.noreply.github.com>
