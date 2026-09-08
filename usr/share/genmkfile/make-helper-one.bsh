@@ -1104,8 +1104,10 @@ ${untagged_list}"
       absolute_filename_without_hash="${filename_without_hash/#.\//\/}"
       pkg_name="${file_name##*/}"
       pkg_name="${pkg_name##*#}"
-      ## TODO: Check for '^.' removed, safe?
-      if [ -z "${pkg_name}" ] || ! [[ "${pkg_name}" =~ ^[-a-z0-9+.]+$ ]]; then
+      ## Debian policy: start with an alphanumeric (min two chars). Anchoring the
+      ## first character rejects a '#.evil' tag whose '.evil.install' would be a
+      ## hidden/traversal path, which a bare '[-a-z0-9+.]+' accepted.
+      if [ -z "${pkg_name}" ] || ! [[ "${pkg_name}" =~ ^[a-z0-9][a-z0-9+.-]+$ ]]; then
         exit_with_error 1 "invalid package name '${pkg_name}' from multi-package filename '${file_name}' (expected '<path>#<pkgname>')"
       fi
       temp_deb_install_file="${genmkfile_temp_dir}/${pkg_name}.install"
