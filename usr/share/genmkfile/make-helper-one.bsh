@@ -351,9 +351,9 @@ make_get_variables_parse_stanzas() {
   ## according to
   ## https://www.debian.org/doc/debian-policy/ch-controlfields.html,
   ## therefore no need to handle continuation lines for them.
-  make_require safe-rm
   if ! stanza_list="$(grep-dctrl --show-field=Package,Architecture '' "${make_debian_control_file_absolute_path}")"; then
-    safe-rm --force -- "${stanza_list}"
+    ## stanza_list holds grep-dctrl's captured stdout, not a temp-file path -- there
+    ## is nothing to clean up here (no mktemp in this function).
     exit_with_error 1 "parsing debian/control failed (grep-dctrl) -- malformed control?"
   fi
   while IFS= read -r line; do
@@ -1997,9 +1997,16 @@ make_helper() {
         ## Need to check first if it is a file...
         ## ...before checking if it is an executable.
         ## Because folders can also have executable bit.
-        fso_with_destdir_stat="$(stat -c "%a" -- "${file_with_destdir}")"
         #echo "source_fso: $source_fso"
-        if test -d "${source_fso}"; then
+        if test -L "${source_fso}"; then
+          ## A symlink's own permission bits are meaningless on Linux, and
+          ## 'stat'/'chmod' on the installed link DEREFERENCE it -- chmod'ing
+          ## whatever it points at. An in-tree symlink into /etc/sudoers.d would
+          ## then drop the real 0440 sudoers file to 644, bypassing
+          ## folder_permission_skip_list. Leave it exactly as rsync installed it.
+          true "INFO: not mode-fixing symlink '${file_with_destdir}'."
+        elif test -d "${source_fso}"; then
+          fso_with_destdir_stat="$(stat -c "%a" -- "${file_with_destdir}")"
           if [ "${fso_with_destdir_stat}" != "755" ]; then
             if [ "${DESTDIR}" = "/" ]; then
               true "calling...: in_array |${file_without_pwd}| |${folder_permission_skip_list[*]}|"
@@ -2012,6 +2019,7 @@ make_helper() {
             fi
           fi
         elif test -f "${source_fso}"; then
+          fso_with_destdir_stat="$(stat -c "%a" -- "${file_with_destdir}")"
           true "calling...: path_is_within_any '${file_without_pwd}' '${folder_permission_skip_list[*]}'"
           if ! path_is_within_any "${file_without_pwd}" "${folder_permission_skip_list[@]}"; then
             true "path_is_within_any did not match, therefore continuing..."
