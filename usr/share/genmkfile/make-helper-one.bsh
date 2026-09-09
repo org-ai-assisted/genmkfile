@@ -123,7 +123,7 @@ deb_variables_check() {
 make_init() {
   local pwd dirname_pwd parent_folder
 
-  [ -n "${SUDO_TO_ROOT}" ] || SUDO_TO_ROOT="sudo"
+  [ -n "${SUDO_TO_ROOT:-}" ] || SUDO_TO_ROOT="sudo"
 
   ## For manual invocation.
   ## Should be set by makefile already.
@@ -1660,6 +1660,7 @@ make_deb_install() {
   ## Note, selecting 'systemcheck' instead of '/home/user/derivative-binary/genmkfile-packages-result/systemcheck_25.1-1_all.deb'
   ## systemcheck is already the newest version (3:25.1-1).
   ## TODO: '--reinstall' does not fully fix this.
+  # shellcheck disable=SC2086
   make_log_and_run \
     ${SUDO_TO_ROOT} \
     apt-get \
@@ -2072,16 +2073,34 @@ make_helper() {
         if test -f "${source_fso}"; then
           ## make_deb_install runs make_installcheck but configuration files may have changed on the system.
           ##
-          ## TODO: How do we handle files in sudoers.d? (See also 'folder_permission_skip_list'.)
-          ##       Run make_installcheck as root?
-          ## diff: /etc/sudoers.d/pwfeedback: Permission denied
-          if [ "/${source_directory}" = "/etc" ]; then
-            diff -- "${source_fso}" "${file_with_destdir}" || make_output_info "'${file_with_destdir}' changed in /etc"
-          elif [ "/${source_directory}" = "/usr/local/etc" ]; then
-            diff -- "${source_fso}" "${file_with_destdir}" || make_output_info "'${file_with_destdir}' changed in /usr/local/etc"
-          else
-            diff -- "${source_fso}" "${file_with_destdir}"
+          ## Root-owned installed config (e.g. '/etc/sudoers.d', mode 0440) is
+          ## unreadable to a non-root installcheck, so a bare 'diff' fails
+          ## "Permission denied" and misreports an unchanged file as changed.
+          ## Read the installed copy via sudo into a temp file for the diff.
+          ## If even sudo cannot read it, say so and skip -- never a false
+          ## "changed", never a hard failure that aborts installcheck.
+          local installcheck_installed installcheck_tmp
+          installcheck_installed="${file_with_destdir}"
+          installcheck_tmp=""
+          if ! [ -r "${file_with_destdir}" ]; then
+            installcheck_tmp="$(mktemp)"
+            # shellcheck disable=SC2086
+            if ${SUDO_TO_ROOT:-sudo} --non-interactive cat -- "${file_with_destdir}" >"${installcheck_tmp}" 2>/dev/null; then
+              installcheck_installed="${installcheck_tmp}"
+            else
+              safe-rm --force -- "${installcheck_tmp}"
+              make_output_info "'${file_with_destdir}' not readable (root-owned); re-run installcheck as root to verify"
+              continue
+            fi
           fi
+          if [ "/${source_directory}" = "/etc" ]; then
+            diff -- "${source_fso}" "${installcheck_installed}" || make_output_info "'${file_with_destdir}' changed in /etc"
+          elif [ "/${source_directory}" = "/usr/local/etc" ]; then
+            diff -- "${source_fso}" "${installcheck_installed}" || make_output_info "'${file_with_destdir}' changed in /usr/local/etc"
+          else
+            diff -- "${source_fso}" "${installcheck_installed}"
+          fi
+          [ -z "${installcheck_tmp}" ] || safe-rm --force -- "${installcheck_tmp}"
         fi
       elif [ "${make_uninstallsim_}" = "true" ]; then
         if genmkfile_path_present "${file_with_destdir}"; then
