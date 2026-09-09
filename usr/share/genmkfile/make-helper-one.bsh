@@ -437,6 +437,8 @@ make_get_variables_parse_stanzas() {
 }
 
 make_get_variables() {
+  [ -n "${SUDO_TO_ROOT}" ] || SUDO_TO_ROOT="sudo"
+
   ## Initialize the array if the caller did not set it (nounset-safe).
   [ -n "${make_folder_list_for_un_and_install+x}" ] || make_folder_list_for_un_and_install=()
   if [ "${#make_folder_list_for_un_and_install[@]}" -eq 0 ]; then
@@ -1249,7 +1251,7 @@ make_deb_shared_dep() {
   ## extractor produces a space-separated package list and apt-get
   ## expects one argument per package.
   # shellcheck disable=SC2086
-  sudo \
+  ${SUDO_TO_ROOT} \
     apt-get \
     "${DIST_APTGETOPT[@]}" \
     --yes \
@@ -1467,7 +1469,7 @@ beforehand?"
 
     # shellcheck disable=SC2086
     make_log_and_run \
-      sudo \
+      ${SUDO_TO_ROOT} \
       env --unset=TMPDIR --unset=TMP --unset=TEMPDIR --unset=TEMP \
       ${COWBUILDER_PREFIX:-} \
       ${UNSHARE_PID_NS:-} \
@@ -1658,7 +1660,8 @@ make_deb_install() {
   ## Note, selecting 'systemcheck' instead of '/home/user/derivative-binary/genmkfile-packages-result/systemcheck_25.1-1_all.deb'
   ## systemcheck is already the newest version (3:25.1-1).
   ## TODO: '--reinstall' does not fully fix this.
-  make_log_and_run sudo \
+  make_log_and_run \
+    ${SUDO_TO_ROOT} \
     apt-get \
     "${DIST_APTGETOPT[@]}" \
     --yes \
