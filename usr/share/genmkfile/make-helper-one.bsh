@@ -1998,12 +1998,14 @@ make_helper() {
         ## ...before checking if it is an executable.
         ## Because folders can also have executable bit.
         #echo "source_fso: $source_fso"
-        if test -L "${source_fso}"; then
+        if test -L "${source_fso}" || test -L "${file_with_destdir}"; then
           ## A symlink's own permission bits are meaningless on Linux, and
-          ## 'stat'/'chmod' on the installed link DEREFERENCE it -- chmod'ing
-          ## whatever it points at. An in-tree symlink into /etc/sudoers.d would
-          ## then drop the real 0440 sudoers file to 644, bypassing
-          ## folder_permission_skip_list. Leave it exactly as rsync installed it.
+          ## 'stat'/'chmod' DEREFERENCE, chmod'ing whatever the link points at.
+          ## Skip if EITHER side is a symlink: a source symlink into /etc/sudoers.d
+          ## would drop the real 0440 sudoers file to 644 (bypassing
+          ## folder_permission_skip_list), and a destination that is (or became) a
+          ## symlink would redirect the chmod onto an unintended file. Leave it as
+          ## rsync installed it.
           true "INFO: not mode-fixing symlink '${file_with_destdir}'."
         elif test -d "${source_fso}"; then
           fso_with_destdir_stat="$(stat -c "%a" -- "${file_with_destdir}")"
