@@ -1104,6 +1104,11 @@ ${untagged_list}"
       filename_hash_base="${file_name##*/}"
       filename_without_hash="${filename_hash_dir}/${filename_hash_base%#*}"
       absolute_filename_without_hash="${filename_without_hash/#.\//\/}"
+      ## KNOWN LIMITATION: '#' is the reserved '<path>#<pkgname>' tag separator;
+      ## only the LAST '#' splits. A source filename with a literal '#' that is
+      ## not a package tag is misparsed into a bogus package. The source folder
+      ## must be trusted -- its filenames come from the packager, not untrusted
+      ## input. The pkg-name regex below rejects the grossest garbage only.
       pkg_name="${file_name##*/}"
       pkg_name="${pkg_name##*#}"
       ## Debian policy: start with an alphanumeric (min two chars). Anchoring the
@@ -1916,6 +1921,8 @@ make_helper() {
   #genmkfile_rsync_opts+=("--executability")
 
   genmkfile_rsync_opts+=("--recursive")     ## recurse into directories
+  ## By design: DESTDIR is a build-controlled staging tree, so following a
+  ## symlinked directory on the receiver into its target is intended here.
   genmkfile_rsync_opts+=("--keep-dirlinks") ## treat symlinked dir on receiver as dir
   genmkfile_rsync_opts+=("--links")         ## copy symlinks as symlinks
   genmkfile_rsync_opts+=("--hard-links")    ## preserve hard links
@@ -2343,19 +2350,24 @@ make_git_tag_verify() {
     fi
   fi
 
-  [ -n "${sq_git_trust_root:-}" ] || sq_git_trust_root="$(git rev-parse --verify "refs/tags/${make_git_tag_version_number}^{commit}")"
+  local trust_root
+  trust_root="${sq_git_trust_root:-}"
+  [ -n "${trust_root}" ] || trust_root="$(git rev-parse --verify "refs/tags/${make_git_tag_version_number}^{commit}")"
 
-  sq_git_run "refs/tags/${make_git_tag_version_number}"
+  sq_git_run "refs/tags/${make_git_tag_version_number}" "${trust_root}"
 }
 
 sq_git_run() {
-  local cmd
+  local pathspec trust_root policy_file cmd
+  pathspec="$1"
   make_require sq-git
-  ## XXX: hardcoded
-  [ -n "${sq_git_trust_root:-}" ] || sq_git_trust_root="HEAD"
-  ## XXX: hardcoded
-  [ -n "${sq_git_policy_file:-}" ] || sq_git_policy_file="${HOME}/derivative-maker/buildconfig.d/openpgp-policy.toml"
-  cmd=(sq-git log --policy-file "${sq_git_policy_file}" --trust-root "${sq_git_trust_root}" -- "${1}")
+  ## Function-local, so a prior verify's trust root cannot leak into a later
+  ## one (make_git_verify runs a 'HEAD' commit-verify then a tag-verify in the
+  ## same shell). Precedence: explicit 2nd arg > caller/env preset > HEAD.
+  trust_root="${2:-${sq_git_trust_root:-HEAD}}"
+  ## XXX: hardcoded default; overridable via the environment.
+  policy_file="${sq_git_policy_file:-${HOME}/derivative-maker/buildconfig.d/openpgp-policy.toml}"
+  cmd=(sq-git log --policy-file "${policy_file}" --trust-root "${trust_root}" -- "${pathspec}")
   make_output_info "running: ${cmd[*]}"
   ## Direct call (no make_function_run wrapper) so make_git_commit_verify
   ## can 'if ! sq_git_run "HEAD"' to catch failures and print a
