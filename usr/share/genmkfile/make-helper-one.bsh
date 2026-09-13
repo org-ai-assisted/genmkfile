@@ -43,7 +43,14 @@ if [ "${GENMKFILE_DEBUG:-}" = "1" ]; then
 fi
 
 make_output_info() {
-  printf "%s\n" "${0}: ${cyan:-}[${make_source_package_name:-${PWD##*/}}]${reset:-} ${green}INFO:${reset} ${*}"
+  ## Diagnostics go to stdout normally. The deb-*-dep-echo targets set
+  ## make_quiet_stdout=true so INFO goes to stderr instead, leaving stdout a clean
+  ## machine-readable dependency list for the caller to capture.
+  local __info_fd=1
+  if [ "${make_quiet_stdout:-}" = "true" ]; then
+    __info_fd=2
+  fi
+  printf "%s\n" "${0}: ${cyan:-}[${make_source_package_name:-${PWD##*/}}]${reset:-} ${green}INFO:${reset} ${*}" >&"${__info_fd}"
 }
 
 make_output_warn() {
@@ -714,6 +721,18 @@ genmkfile deb-run-dep
 genmkfile deb-all-dep
    Combination of deb-build-dep and deb-run-dep.
 
+genmkfile deb-build-dep-echo
+   Echo (to stdout, one package per line) the build dependencies that deb-build-dep
+   would install, WITHOUT installing them. genmkfile's own diagnostics go to stderr, so
+   stdout is a clean list to capture into a variable for a later batch install.
+
+genmkfile deb-run-dep-echo
+   Echo the runtime dependencies that deb-run-dep would install, WITHOUT installing them.
+
+genmkfile deb-all-dep-echo
+   Echo the combined build + runtime dependencies (what deb-all-dep would install),
+   WITHOUT installing -- for collecting several packages' deps into one batch install.
+
 genmkfile deb-pkg-build
    Create a deb, which will be stored in the parent folder.
 
@@ -1302,6 +1321,37 @@ make_deb_all_dep() {
   make_function_run make_deb_shared_dep
 }
 
+make_deb_shared_dep_echo() {
+  ## Echo the dependency package names to stdout, one per line, WITHOUT installing, so a
+  ## caller can capture them into a variable (e.g. to batch-install several packages' deps
+  ## in a single apt-get). make_quiet_stdout keeps genmkfile's INFO on stderr, so stdout is
+  ## exactly this list. The extractor output is space-separated; one-per-line makes it easy
+  ## for the caller to collect + dedup (e.g. 'sort --unique') across packages.
+  local dep
+  ## $make_deb_shared_dependencies is a space-separated list; word-split it intentionally.
+  # shellcheck disable=SC2086
+  for dep in ${make_deb_shared_dependencies}; do
+    printf '%s\n' "${dep}"
+  done
+}
+
+make_deb_build_dep_echo() {
+  ## Echoes what make_deb_build_dep would install (build-essential + dctrl-tools injected;
+  ## see make_deb_build_dep) instead of installing it.
+  local make_deb_shared_dependencies="build-essential dctrl-tools ${make_deb_build_dependencies}"
+  make_function_run make_deb_shared_dep_echo
+}
+
+make_deb_run_dep_echo() {
+  local make_deb_shared_dependencies="${make_deb_runtime_dependencies}"
+  make_function_run make_deb_shared_dep_echo
+}
+
+make_deb_all_dep_echo() {
+  local make_deb_shared_dependencies="build-essential dctrl-tools ${make_deb_build_dependencies} ${make_deb_runtime_dependencies}"
+  make_function_run make_deb_shared_dep_echo
+}
+
 make_deb_pkg_build_shared() {
   local cow_folder base_folder package
   local -a make_cowbuilder_config_file_arg=()
@@ -1858,6 +1908,12 @@ genmkfile_path_present() {
 
 genmkfile_install_exclude_patterns=(
   '__pycache__' '.mypy_cache' '.pytest_cache' '.hypothesis' '*.pyc' '*.pyo'
+  ## VCS files are excluded from the BUILT package (find_pkgfiles_args), so exclude them
+  ## from install + installcheck too. Otherwise a source-tree .gitignore (common under
+  ## usr/share/<pkg>/) is copied by 'make install' yet absent from the .deb, and 'deb-icup'
+  ## installcheck then diffs it against a path the package never shipped:
+  ##   diff: /usr/share/<pkg>/.gitignore: No such file or directory
+  '.gitignore' '.git'
 )
 
 genmkfile_install_path_excluded() {
@@ -2767,6 +2823,16 @@ if was_executed "${BASH_SOURCE[0]}"; then
   : "${red:=}" "${green:=}" "${bold:=}" "${reset:=}" \
     "${cyan:=}" "${under:=}" "${eunder:=}"
 
+  ## The deb-*-dep-echo targets print ONLY the dependency list on stdout (for capture into
+  ## a variable). Route genmkfile's own diagnostics to stderr for the whole run when such a
+  ## target is requested, so stdout stays clean. Set before the first make_output_info below.
+  make_quiet_stdout=""
+  case " $* " in
+    *" deb-build-dep-echo "* | *" deb-run-dep-echo "* | *" deb-all-dep-echo "*)
+      make_quiet_stdout="true"
+      ;;
+  esac
+
   temp="$*"
   if [ -z "${temp}" ]; then
     make_output_info "called without parameters."
@@ -2816,7 +2882,8 @@ if was_executed "${BASH_SOURCE[0]}"; then
     case "${__arg}" in
     '' | help | test | --)
       ;;
-    deb-build-dep | deb-run-dep | deb-all-dep)
+    deb-build-dep | deb-run-dep | deb-all-dep | \
+      deb-build-dep-echo | deb-run-dep-echo | deb-all-dep-echo)
       __needs_dependencies=true
       ;;
     *)
