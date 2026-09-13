@@ -1964,7 +1964,17 @@ make_helper() {
     exit_with_error 1 "DESTDIR '${DESTDIR}' does not exist!"
   fi
 
-  if [ "${make_installcheck_}" != "true" ]; then
+  ## Only the modes that actually WRITE to DESTDIR need it writable. installcheck,
+  ## uninstallcheck, installsim and uninstallsim are read-only or dry-run (a stat, an
+  ## rsync --dry-run, or a "would do" print), so requiring a writable DESTDIR for them
+  ## wrongly aborts an unprivileged 'genmkfile uninstallcheck' / installsim / uninstallsim
+  ## against the default DESTDIR=/ -- only install and uninstall write.
+  ## Only the modes that actually WRITE to DESTDIR need it writable. installcheck,
+  ## uninstallcheck, installsim and uninstallsim are read-only or dry-run (a stat, an
+  ## rsync --dry-run, or a "would do" print), so requiring a writable DESTDIR for them
+  ## wrongly aborts an unprivileged 'genmkfile uninstallcheck' / installsim / uninstallsim
+  ## against the default DESTDIR=/ -- only install and uninstall write.
+  if [ "${make_install_}" = "true" ] || [ "${make_uninstall_}" = "true" ]; then
     if ! test -w "${DESTDIR}"; then
       exit_with_error 1 "DESTDIR '${DESTDIR}' is not writeable!"
     fi
