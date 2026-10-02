@@ -106,19 +106,112 @@ If '${cmd}' is listed in debian/control, try:
   done
 }
 
+## Derive DEBEMAIL and DEBFULLNAME together from the debian/control 'Maintainer:' field
+## (RFC822 'Full Name <email>') and export them for the child tools (debchange, sq). The
+## maintainer identity is one coherent mailbox, so the caller invokes this only when BOTH
+## are unset -- a half-set override is left to fail loud, never mixed with control. No-op
+## when debian/control is absent (special git-describe repos) -- the caller's guard then
+## fails loud.
+deb_maintainer_identity_from_control() {
+  local maintainer_raw derived_name derived_email
+  local newline=$'\n'
+
+  if [ -z "${make_debian_control_file_absolute_path:-}" ] \
+    || [ ! -r "${make_debian_control_file_absolute_path}" ]; then
+    return 0
+  fi
+
+  make_require grep-dctrl
+
+  ## Scope to the SOURCE stanza's Maintainer only (-F Source): an empty pattern would
+  ## match every paragraph, and a Maintainer in a binary stanza too, yielding multi-line
+  ## output that would corrupt the derived identity. A non-zero grep-dctrl is a real
+  ## parse error (it can still print a partial value) -- fail loud, do not derive.
+  ## A doubly-malformed control (a stray 'Source:' in a non-source stanza AND the real
+  ## source stanza missing its mandatory Maintainer) is out of scope: dpkg/lintian reject
+  ## it, a comment-aware first-paragraph selector would mean reinventing a deb822 parser,
+  ## and a writer of debian/control already controls the real Maintainer directly.
+  if ! maintainer_raw="$(grep-dctrl -F Source --show-field=Maintainer --no-field-names '' "${make_debian_control_file_absolute_path}")"; then
+    exit_with_error 1 "failed to parse the Maintainer field from '${make_debian_control_file_absolute_path}'. Set DEBEMAIL and DEBFULLNAME explicitly."
+  fi
+
+  ## grep-dctrl preserves RFC822 folding verbatim, so a folded (continuation-line)
+  ## Maintainer carries an embedded newline that would split the changelog trailer across
+  ## lines -- reject a multi-line value rather than corrupt debian/changelog.
+  case "${maintainer_raw}" in
+    *"${newline}"*)
+      exit_with_error 1 "the Maintainer field in '${make_debian_control_file_absolute_path}' spans multiple lines. Set DEBEMAIL and DEBFULLNAME explicitly."
+      ;;
+  esac
+
+  ## A Debian Maintainer is a single RFC822 mailbox 'Full Name <email>'. Require EXACTLY
+  ## one '<...>' pair and reject anything else -- no address, more than one address
+  ## (an ambiguous field or a parenthetical note carrying its own address), or an
+  ## unclosed bracket. Guessing which bracket is the real one is a losing game, so the
+  ## caller fails loud and the operator sets DEBEMAIL/DEBFULLNAME explicitly.
+  case "${maintainer_raw}" in
+    *'<'*'<'* | *'>'*'>'*)
+      exit_with_error 1 "ambiguous Maintainer (more than one address) in '${make_debian_control_file_absolute_path}'. Set DEBEMAIL and DEBFULLNAME explicitly."
+      ;;
+    *'<'*'>'*)
+      ;;
+    *)
+      exit_with_error 1 "could not parse a 'Full Name <email>' Maintainer from '${make_debian_control_file_absolute_path}'. Set DEBEMAIL and DEBFULLNAME explicitly."
+      ;;
+  esac
+
+  derived_email="${maintainer_raw#*<}"
+  derived_email="${derived_email%%>*}"
+  derived_name="${maintainer_raw%%<*}"
+  ## Strip surrounding whitespace from both (grep-dctrl passes it through verbatim).
+  derived_email="${derived_email#"${derived_email%%[![:space:]]*}"}"
+  derived_email="${derived_email%"${derived_email##*[![:space:]]}"}"
+  derived_name="${derived_name#"${derived_name%%[![:space:]]*}"}"
+  derived_name="${derived_name%"${derived_name##*[![:space:]]}"}"
+
+  ## The single bracketed value must be a real addr-spec: exactly one '@' with a
+  ## non-empty local part and domain and no embedded whitespace. A malformed address (a
+  ## bare '@', 'a @ b', 'a@@b', ...) is rejected, not written to the changelog. Fuller
+  ## RFC822 forms (quoted display names, comments) do not occur in a Debian Maintainer
+  ## field and are deliberately rejected -- set DEBEMAIL/DEBFULLNAME explicitly instead.
+  case "${derived_email}" in
+    *[[:space:]]* | *@*@*)
+      exit_with_error 1 "derived maintainer e-mail '${derived_email}' from '${make_debian_control_file_absolute_path}' is not a valid address. Set DEBEMAIL and DEBFULLNAME explicitly."
+      ;;
+    ?*@?*)
+      ;;
+    *)
+      exit_with_error 1 "derived maintainer e-mail '${derived_email}' from '${make_debian_control_file_absolute_path}' is not a valid address. Set DEBEMAIL and DEBFULLNAME explicitly."
+      ;;
+  esac
+
+  DEBEMAIL="${derived_email}"
+  DEBFULLNAME="${derived_name}"
+  export DEBEMAIL DEBFULLNAME
+}
+
 ## Validate DEBEMAIL / DEBFULLNAME. The matching tools (debsign,
 ## debchange, sq, sq-git, git, bc, ...) are 'make_require'd at each
 ## individual call site rather than lumped together here, so failing a
 ## target only blocks on the tools that target actually needs.
 deb_variables_check() {
+  ## Derive the maintainer identity from debian/control only when BOTH vars are unset, so
+  ## the debian/changelog trailer equals the control Maintainer with zero configuration.
+  ## A partially-set identity is NOT completed from control (that would pair an operator
+  ## value with a control value into an incoherent mailbox) -- it falls through to the
+  ## mandatory-non-empty guard below and fails loud.
+  if [ -z "${DEBEMAIL:-}" ] && [ -z "${DEBFULLNAME:-}" ]; then
+    deb_maintainer_identity_from_control
+  fi
+
+  ## A non-empty identity is mandatory: otherwise the e-mail address in
+  ## debian/changelog would default to user@host.localdomain and then lintian would
+  ## complain and exit with failure code.
   if [ -z "${DEBEMAIL:-}" ]; then
-    ## Otherwise e-mail address in debian/changelog would default to
-    ## user@host.localdomain and then lintian would complain and exit with
-    ## failure code.
-    exit_with_error 1 "environment variable DEBEMAIL may not be empty! Both, DEBEMAIL and DEBFULLNAME need to be set!"
+    exit_with_error 1 "DEBEMAIL is empty and could not be derived from debian/control. Set DEBEMAIL and DEBFULLNAME, or add a 'Maintainer:' field to debian/control."
   fi
   if [ -z "${DEBFULLNAME:-}" ]; then
-    exit_with_error 1 "environment variable DEBFULLNAME may not be empty! Both, DEBEMAIL and DEBFULLNAME need to be set!"
+    exit_with_error 1 "DEBFULLNAME is empty and could not be derived from debian/control. Set DEBEMAIL and DEBFULLNAME, or add a 'Maintainer:' field to debian/control."
   fi
 
   ## TODO: DEBSIGN_KEYID ?
