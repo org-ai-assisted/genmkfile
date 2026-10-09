@@ -106,19 +106,69 @@ If '${cmd}' is listed in debian/control, try:
   done
 }
 
-## Validate DEBEMAIL / DEBFULLNAME. The matching tools (debsign,
-## debchange, sq, sq-git, git, bc, ...) are 'make_require'd at each
-## individual call site rather than lumped together here, so failing a
-## target only blocks on the tools that target actually needs.
+## Derive DEBEMAIL and DEBFULLNAME from the debian/control 'Maintainer:' field.
+deb_maintainer_identity_from_control() {
+  local maintainer_raw derived_name derived_email
+
+  if [ -z "${make_debian_control_file_absolute_path:-}" ] \
+    || [ ! -r "${make_debian_control_file_absolute_path}" ]; then
+    return 0
+  fi
+
+  make_require grep-dctrl
+
+  ## Only look for the maintainer field in the source stanza.
+  if ! maintainer_raw="$(grep-dctrl -F Source --show-field=Maintainer --no-field-names '' "${make_debian_control_file_absolute_path}")"; then
+    exit_with_error 1 "failed to parse the Maintainer field from '${make_debian_control_file_absolute_path}'. Fix the file."
+  fi
+
+  ## Reject multi-line values, Maintainer should just be one line.
+  if [[ "${maintainer_raw}" == *$'\n'* ]]; then
+    exit_with_error 1 "the Maintainer field in '${make_debian_control_file_absolute_path}' spans multiple lines. Fix the file."
+  fi
+
+  ## Validate field value.
+  if [[ "${maintainer_raw}" == *'<'*'<'* ]] \
+    || [[ "${maintainer_raw}" == *'>'*'>'* ]] \
+    || ! [[ "${maintainer_raw}" == *'<'*'>'* ]]; then
+    exit_with_error 1 "corrupt Maintainer field in '${make_debian_control_file_absolute_path}'. Fix the file."
+  fi
+
+  derived_email="${maintainer_raw#*<}"
+  derived_email="${derived_email%%>*}"
+  derived_name="${maintainer_raw%%<*}"
+  ## Strip surrounding whitespace.
+  derived_email="${derived_email#"${derived_email%%[![:space:]]*}"}"
+  derived_email="${derived_email%"${derived_email##*[![:space:]]}"}"
+  derived_name="${derived_name#"${derived_name%%[![:space:]]*}"}"
+  derived_name="${derived_name%"${derived_name##*[![:space:]]}"}"
+
+  ## Sanity-check the email address.
+  if [[ "${derived_email}" == *[[:space:]]* ]] \
+    || [[ "${derived_email}" == *@*@* ]] \
+    || ! [[ "${derived_email}" == ?*@?* ]]; then
+    exit_with_error 1 "derived maintainer e-mail '${derived_email}' from '${make_debian_control_file_absolute_path}' is not a valid address. Fix the file."
+  fi
+
+  DEBEMAIL="${derived_email}"
+  DEBFULLNAME="${derived_name}"
+  export DEBEMAIL DEBFULLNAME
+}
+
+## Ensure required variables are set.
 deb_variables_check() {
+  ## A non-empty identity is mandatory.
   if [ -z "${DEBEMAIL:-}" ]; then
-    ## Otherwise e-mail address in debian/changelog would default to
-    ## user@host.localdomain and then lintian would complain and exit with
-    ## failure code.
-    exit_with_error 1 "environment variable DEBEMAIL may not be empty! Both, DEBEMAIL and DEBFULLNAME need to be set!"
+    if [ -n "${DEBFULLNAME:-}" ]; then
+      exit_with_error 1 "DEBEMAIL is empty but DEBFULLNAME is non-empty. Either set both or unset both."
+    fi
+    exit_with_error 1 "DEBEMAIL is empty and could not be derived from debian/control. Fix the file and optionally set DEBEMAIL and DEBFULLNAME."
   fi
   if [ -z "${DEBFULLNAME:-}" ]; then
-    exit_with_error 1 "environment variable DEBFULLNAME may not be empty! Both, DEBEMAIL and DEBFULLNAME need to be set!"
+    if [ -n "${DEBEMAIL:-}" ]; then
+      exit_with_error 1 "DEBFULLNAME is empty but DEBEMAIL is non-empty. Either set both or unset both."
+    fi
+    exit_with_error 1 "DEBFULLNAME is empty and could not be derived from debian/control. Fix the file and optionally set DEBEMAIL and DEBFULLNAME."
   fi
 
   ## TODO: DEBSIGN_KEYID ?
@@ -256,6 +306,11 @@ make_get_dependencies() {
   # shellcheck source=./shared.bsh
   source "${GENMKFILE_PATH}/shared.bsh"
   make_shared_function
+
+  ## If DEBEMAIL or DEBFULLNAME aren't set, extract them from the control file.
+  if [ -z "${DEBEMAIL:-}" ] && [ -z "${DEBFULLNAME:-}" ]; then
+    deb_maintainer_identity_from_control
+  fi
 
   ## Special repos opted in via make_use_git_describe_for_version
   ## have no debian/control; nothing to parse.
@@ -1329,6 +1384,30 @@ make_deb_all_dep_echo() {
   make_function_run make_deb_shared_dep_echo
 }
 
+make_debhelper_token_check() {
+  ## Ensures only a single '#DEBHELPER#' string occurs anywhere in a maintainer
+  ## script, and that it occurs on a line by itself.
+  local script_file token_count nullglob_was_set
+  shopt -q nullglob && nullglob_was_set="true" || nullglob_was_set="false"
+  shopt -s nullglob
+  for script_file in \
+    debian/preinst   debian/postinst   debian/prerm   debian/postrm \
+    debian/*.preinst debian/*.postinst debian/*.prerm debian/*.postrm; do
+    [ -f "${script_file}" ] || continue
+    token_count="$(grep --only-matching --fixed-strings -- '#DEBHELPER#' "${script_file}" | wc -l)"
+    if [ "${token_count}" -gt 1 ]; then
+      exit_with_error 1 "Multiple '#DEBHELPER#' tokens found in maintainer script '${script_file}'!"
+    fi
+    if [ "${token_count}" -lt 1 ]; then
+      exit_with_error 1 "No '#DEBHELPER#' token found in maintainer script '${script_file}'!"
+    fi
+    if grep -e '.\+#DEBHELPER#.*' -e '.*#DEBHELPER#.\+' "${script_file}" ; then
+      exit_with_error 1 "'#DEBHELPER#' token is not on a line by itself! It should not be surrounded with other text or indented."
+    fi
+  done
+  [ "${nullglob_was_set}" = "true" ] || shopt -u nullglob
+}
+
 make_deb_pkg_build_shared() {
   local cow_folder base_folder package
   local -a make_cowbuilder_config_file_arg=()
@@ -1340,6 +1419,8 @@ make_deb_pkg_build_shared() {
     make_output_info "Skipping build because all binaries built by this package are arch-all and they have already been built."
     return 0
   fi
+
+  make_debhelper_token_check
 
   if [ "${make_use_cowbuilder:-}" = "true" ]; then
     make_require sudo cowbuilder
