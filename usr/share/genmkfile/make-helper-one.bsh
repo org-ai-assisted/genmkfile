@@ -1422,6 +1422,26 @@ make_deb_pkg_build_shared() {
 
   make_debhelper_token_check
 
+  ## REUSE/SPDX compliance check, before the build so a non-compliant tree
+  ## fails fast. Opt-in: only a source tree that carries REUSE.toml (or
+  ## .reuse/dep5) is checked, so packages that have not adopted REUSE are
+  ## unaffected.
+  if [ "${make_use_reuse:-}" = "false" ]; then
+    make_output_info "make_use_reuse=false - skipping reuse lint."
+  elif [ "${make_use_reuse:-}" = "true" ]; then
+    make_output_info "make_use_reuse=true - running reuse lint..."
+    make_function_run make_reuse
+  elif test -f "${PWD}/REUSE.toml" || test -f "${PWD}/.reuse/dep5"; then
+    if has reuse; then
+      make_output_info "REUSE.toml detected, running reuse lint..."
+      make_function_run make_reuse
+    else
+      make_output_warn "REUSE.toml present but the 'reuse' tool is not installed - skipping the SPDX compliance check. Install the 'reuse' package to enable it."
+    fi
+  else
+    make_output_info "no REUSE.toml - skipping reuse lint (package has not adopted REUSE)."
+  fi
+
   if [ "${make_use_cowbuilder:-}" = "true" ]; then
     make_require sudo cowbuilder
     if ! test -f "${make_upstream_tarball_real_path}"; then
@@ -1751,6 +1771,47 @@ make_lintian() {
     make_lintian_on_warning "${make_lintian_exit_code}"
   else
     make_output_info "lintian ok."
+  fi
+}
+
+make_reuse_on_warning() {
+  local reuse_exit_code="${1:-0}"
+  if [ "${make_reuse_fail_open_versus_closed:-}" = "open" ]; then
+    make_output_warn "reuse lint warning. make_reuse_fail_open_versus_closed=open - failing open."
+    return 0
+  fi
+  make_output_error "reuse lint warning. make_reuse_fail_open_versus_closed is not set to 'open' - failing closed."
+  ## reuse may in principle emit output while exiting 0; treat any output as a failure signal.
+  [ "${reuse_exit_code}" = "0" ] && reuse_exit_code=1
+  exit "${reuse_exit_code}"
+}
+
+make_reuse() {
+  ## Validate REUSE/SPDX compliance of the source tree. Runs offline. Lints a
+  ## pristine export of the committed tree rather than ${PWD} directly, so
+  ## build residue in the working directory cannot cause false positives.
+  local reuse_temp_dir reuse_output
+  local make_reuse_exit_code="0"
+  reuse_temp_dir="$(mktemp --directory)"
+  if git -C "${PWD}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "${PWD}" archive --format=tar HEAD | tar --extract --directory "${reuse_temp_dir}"
+  else
+    cp --archive "${PWD}/." "${reuse_temp_dir}/"
+  fi
+  make_output_info "running: reuse lint (pristine export of '${PWD}')"
+  reuse_output="$(cd "${reuse_temp_dir}" && reuse lint 2>&1)" || make_reuse_exit_code="$?"
+  safe-rm --recursive --force -- "${reuse_temp_dir}"
+  if [ "${make_reuse_exit_code}" != "0" ]; then
+    if ! test -o xtrace; then
+      make_output_info "reuse lint exit code: ${make_reuse_exit_code}"
+      make_output_info "reuse lint output:"
+      printf "%s\n" "################################################################################"
+      printf "%s\n" "${reuse_output}"
+      printf "%s\n" "################################################################################"
+    fi
+    make_reuse_on_warning "${make_reuse_exit_code}"
+  else
+    make_output_info "reuse lint ok."
   fi
 }
 
