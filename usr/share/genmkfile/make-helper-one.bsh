@@ -1781,7 +1781,8 @@ make_reuse_on_warning() {
     return 0
   fi
   make_output_error "reuse lint warning. make_reuse_fail_open_versus_closed is not set to 'open' - failing closed."
-  ## reuse may in principle emit output while exiting 0; treat any output as a failure signal.
+  ## This is the failure handler (reuse lint is judged by its exit code, which
+  ## make_reuse only reaches here when non-zero); never exit 0 from it.
   [ "${reuse_exit_code}" = "0" ] && reuse_exit_code=1
   exit "${reuse_exit_code}"
 }
