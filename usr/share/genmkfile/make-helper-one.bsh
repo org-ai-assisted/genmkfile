@@ -1787,20 +1787,13 @@ make_reuse_on_warning() {
 }
 
 make_reuse() {
-  ## Validate REUSE/SPDX compliance of the source tree. Runs offline. Lints a
-  ## pristine export of the committed tree rather than ${PWD} directly, so
-  ## build residue in the working directory cannot cause false positives.
-  local reuse_temp_dir reuse_output
+  ## Validate REUSE/SPDX compliance of the source tree in ${PWD}. Runs
+  ## offline. Assumes a clean source tree; build residue is a separate fault
+  ## caught elsewhere, not worked around here.
   local make_reuse_exit_code="0"
-  reuse_temp_dir="$(mktemp --directory)"
-  if git -C "${PWD}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    git -C "${PWD}" archive --format=tar HEAD | tar --extract --directory "${reuse_temp_dir}"
-  else
-    cp --archive "${PWD}/." "${reuse_temp_dir}/"
-  fi
-  make_output_info "running: reuse lint (pristine export of '${PWD}')"
-  reuse_output="$(cd "${reuse_temp_dir}" && reuse lint 2>&1)" || make_reuse_exit_code="$?"
-  safe-rm --recursive --force -- "${reuse_temp_dir}"
+  local reuse_output
+  make_output_info "running: reuse lint (in '${PWD}')"
+  reuse_output="$(reuse lint 2>&1)" || make_reuse_exit_code="$?"
   if [ "${make_reuse_exit_code}" != "0" ]; then
     if ! test -o xtrace; then
       make_output_info "reuse lint exit code: ${make_reuse_exit_code}"
