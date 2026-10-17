@@ -172,9 +172,12 @@ sudo cowbuilder --create \
 
 - `genmkfile manpages` renders every `man/*.ronn` to `auto-generated-man-pages/<name>`
   with a deterministic date and `--manual`/`--organization` = the source package name.
-- COMMIT `auto-generated-man-pages/` to git; run `genmkfile manpages` (and recommit) only
-  when a `.ronn` changes. Do NOT gitignore them, generate at build time, or Build-Depend on
-  `ronn`.
+- COMMIT `auto-generated-man-pages/` to git. Do NOT gitignore them, generate at build
+  time, or Build-Depend on `ronn`.
+- Edit `man/*.ronn` only; never hand-edit `auto-generated-man-pages/` -- it is generated
+  output. `dm-packaging-helper-script` regenerates it and commits it scoped every packaging
+  pass (before the version-bump decision), so a `.ronn` edit cannot leave the committed man
+  page stale.
 - `debian/rules` just installs them: `override_dh_installman: dh_installman
   $(CURDIR)/auto-generated-man-pages/*` (this package's own `debian/rules` is the model).
 
