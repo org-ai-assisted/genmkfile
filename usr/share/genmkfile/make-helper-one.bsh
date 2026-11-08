@@ -746,7 +746,7 @@ genmkfile manpages
    Create man pages from the man source folder. Output is stored in auto-generated-man-pages folder.
 
 genmkfile uch
-   Store upstream changelog from git log in changelog.upstream.
+   Write changelog.upstream: a REUSE header plus a pointer to git history.
 
 genmkfile install
    Copy files from the source tree to system-wide directories.
@@ -1272,13 +1272,13 @@ make_uch() {
   if test -f "${PWD}/CHANGES"; then
     return 0
   fi
-  make_require git sponge
-  git log | \
-    sed 's/[[:space:]]\+$//' | \
-    stcat | \
-    sponge -- "${PWD}/changelog.upstream"
-  test -f "${PWD}/changelog.upstream"
-  unicode-show "${PWD}/changelog.upstream"
+  ## git history IS the changelog; emit only a REUSE header plus a pointer.
+  printf '%s\n' \
+    "## SPDX-FileCopyrightText: ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>" \
+    "## SPDX-License-Identifier: AGPL-3.0-or-later" \
+    "" \
+    "See git history for full changelog." \
+    > "${PWD}/changelog.upstream"
 }
 
 make_distclean() {
