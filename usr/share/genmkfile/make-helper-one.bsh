@@ -1398,25 +1398,42 @@ make_deb_all_dep_echo() {
 }
 
 make_debhelper_token_check() {
-  ## Ensures only a single '#DEBHELPER#' string occurs anywhere in a maintainer
-  ## script, and that it occurs on a line by itself.
-  local script_file token_count nullglob_was_set
+  ## '#DEBHELPER#' is substituted by a plain-text replace of EVERY occurrence in a
+  ## maintainer script, so more than one occurrence -- or one not on a line by itself --
+  ## duplicates or mangles the generated snippet. Accept exactly one standalone token
+  ## (leading/trailing whitespace allowed) or none; reject anything else.
+  ## Covers arch-qualified names (debian/[<pkg>.]<script>.<arch>, selected by
+  ## dh_installdeb); skips debhelper's own generated '*.debhelper' artifacts. '--text'
+  ## so a stray NUL cannot make grep treat the script as binary and miscount.
+  local script_file base token_count standalone_count nullglob_was_set
   shopt -q nullglob && nullglob_was_set="true" || nullglob_was_set="false"
   shopt -s nullglob
-  for script_file in \
-    debian/preinst   debian/postinst   debian/prerm   debian/postrm \
-    debian/*.preinst debian/*.postinst debian/*.prerm debian/*.postrm; do
+  for script_file in debian/*; do
     [ -f "${script_file}" ] || continue
-    token_count="$(grep --only-matching --fixed-strings -- '#DEBHELPER#' "${script_file}" | wc -l)"
-    if [ "${token_count}" -gt 1 ]; then
-      exit_with_error 1 "Multiple '#DEBHELPER#' tokens found in maintainer script '${script_file}'!"
-    fi
-    if [ "${token_count}" -lt 1 ]; then
-      exit_with_error 1 "No '#DEBHELPER#' token found in maintainer script '${script_file}'!"
-    fi
-    if grep -e '.\+#DEBHELPER#.*' -e '.*#DEBHELPER#.\+' "${script_file}" ; then
-      exit_with_error 1 "'#DEBHELPER#' token is not on a line by itself! It should not be surrounded with other text or indented."
-    fi
+    base="${script_file##*/}"
+    case "${base}" in
+      ## debhelper's own generated snippet files are not source scripts.
+      *.debhelper)
+        continue
+        ;;
+      ## Maintainer scripts: bare, <pkg>-qualified, and either form .<arch>-qualified.
+      preinst | postinst | prerm | postrm | \
+      *.preinst | *.postinst | *.prerm | *.postrm | \
+      preinst.* | postinst.* | prerm.* | postrm.* | \
+      *.preinst.* | *.postinst.* | *.prerm.* | *.postrm.*)
+        token_count="$({ grep --only-matching --fixed-strings --text -- '#DEBHELPER#' "${script_file}" || true; } | wc -l)"
+        if [ "${token_count}" -eq 0 ]; then
+          continue
+        fi
+        standalone_count="$(grep --count --extended-regexp --text -- '^[[:space:]]*#DEBHELPER#[[:space:]]*$' "${script_file}" || true)"
+        if [ "${token_count}" -ne 1 ] || [ "${standalone_count}" -ne 1 ]; then
+          exit_with_error 1 "'#DEBHELPER#' in maintainer script '${script_file}' must appear exactly once, on a line by itself (found ${token_count} occurrence(s), ${standalone_count} standalone)."
+        fi
+        ;;
+      *)
+        continue
+        ;;
+    esac
   done
   [ "${nullglob_was_set}" = "true" ] || shopt -u nullglob
 }
