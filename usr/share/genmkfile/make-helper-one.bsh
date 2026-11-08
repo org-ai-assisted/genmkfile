@@ -1272,9 +1272,22 @@ make_uch() {
   if test -f "${PWD}/CHANGES"; then
     return 0
   fi
+  ## Per-package maintainer email (kicksecure package -> kicksecure.com, whonix
+  ## package -> whonix.org) via genmkfile's own debian/control detection. The
+  ## target dispatch sets DEBEMAIL before this runs; derive it here too so a
+  ## direct/library call still resolves it.
+  if [ -z "${DEBEMAIL:-}" ]; then
+    # shellcheck source=./shared.bsh
+    source "${GENMKFILE_PATH}/shared.bsh"
+    make_shared_function
+    deb_maintainer_identity_from_control
+  fi
+  if [ -z "${DEBEMAIL:-}" ]; then
+    exit_with_error 1 "make_uch: no maintainer email; set DEBEMAIL or add debian/control Maintainer."
+  fi
   ## git history IS the changelog; emit only a REUSE header plus a pointer.
   printf '%s\n' \
-    "## SPDX-FileCopyrightText: ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>" \
+    "## SPDX-FileCopyrightText: ENCRYPTED SUPPORT LLC <${DEBEMAIL}>" \
     "## SPDX-License-Identifier: AGPL-3.0-or-later" \
     "" \
     "See git history for full changelog." \
