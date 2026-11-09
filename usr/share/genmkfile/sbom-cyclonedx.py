@@ -14,6 +14,14 @@
 
 import json
 import os
+import urllib.parse
+
+
+def purl_encode(component):
+    ## Percent-encode a purl component per the purl spec: everything outside the
+    ## RFC-3986 unreserved set (A-Z a-z 0-9 - . _ ~), so an epoch ':' becomes
+    ## '%3A' and a '+' (e.g. in 'libstdc++6') becomes '%2B'.
+    return urllib.parse.quote(component, safe="")
 
 
 def main():
@@ -29,7 +37,7 @@ def main():
                 "type": "application",
                 "name": binpkg,
                 "version": version,
-                "purl": "pkg:deb/debian/%s@%s" % (binpkg, version),
+                "purl": "pkg:deb/debian/%s@%s" % (purl_encode(binpkg), purl_encode(version)),
             },
             "properties": [
                 {"name": "kicksecure:sbom:tier", "value": "declared-floor"},
@@ -44,7 +52,7 @@ def main():
                 "type": "library",
                 "name": dep,
                 "scope": "required",
-                "purl": "pkg:deb/debian/%s" % dep,
+                "purl": "pkg:deb/debian/%s" % purl_encode(dep),
             }
             for dep in deps
         ],

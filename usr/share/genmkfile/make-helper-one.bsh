@@ -1090,6 +1090,20 @@ debinstfile_has_nogenmkfile_marker() {
   grep --extended-regexp -- '^[[:space:]]*#*[[:space:]]*nogenmkfile[[:space:]]*$' "$1" >/dev/null 2>&1
 }
 
+## True if the package routes installable files to binary packages via a
+## '#<pkgname>' filename tag (multi-package mode), false otherwise. Shared by
+## make_debinstfile_create (which strips the tag) and make_sbom (which appends
+## it) so the two can never disagree about a package's mode -- a divergence
+## would ship the SBOM under a literal '#<pkg>'-tagged path. Same
+## find_pkgfiles_args exclusions (./debian, .git, .gitignore). '-print -quit'
+## returns at the first match: no pipe, so no 'find | grep -q' SIGPIPE that
+## pipefail would turn into a false negative.
+make_pkgfiles_multi_package() {
+  local probe
+  probe="$(find . "${find_pkgfiles_args[@]}" -iname '*#*' '(' -type f -o -type l ')' -print -quit 2>/dev/null)"
+  [ -n "${probe}" ]
+}
+
 make_debinstfile() {
   make_debinstfile_create
 }
@@ -1122,7 +1136,7 @@ make_debinstfile_create() {
   find_cmd+=(-iname '*#*')
   find_cmd+=('(' -type f -o -type l ')')
 
-  if "${find_cmd[@]}" | grep --fixed-strings -- '#' >/dev/null; then
+  if make_pkgfiles_multi_package; then
     true "multi-package hash filename found: yes"
 
     ## If we're in multi-package mode, any files without the '#' tag will be
@@ -1293,18 +1307,14 @@ make_sbom() {
   version="$(dpkg-parsechangelog -l debian/changelog -S Version)"
 
   ## Multi-package sources route each file to its binary package via a
-  ## '#<pkgname>' filename tag (see make_debinstfile_create). Detect that the
-  ## same way debinstfile does and match it, so the SBOM lands in the correct
+  ## '#<pkgname>' filename tag; make_debinstfile_create later strips it. Reuse
+  ## its EXACT mode detection (shared helper) so the SBOM lands in the correct
   ## .deb. Single-package trees stay untagged and are picked up by the 'usr/*'
   ## install line. Forked packages with a hand-maintained debian/install are
   ## not auto-shipped; that is consistent with debinstfile and left to the
   ## maintainer.
-  ## '-print -quit' stops at the first tagged file: no pipe, so no 'find | grep
-  ## -q' SIGPIPE that 'pipefail' would turn into a false negative.
-  local tagged_probe
   is_multi_package="false"
-  tagged_probe="$(find . -name .git -prune -o '(' -type f -o -type l ')' -iname '*#*' -print -quit 2>/dev/null)"
-  if [ -n "${tagged_probe}" ]; then
+  if make_pkgfiles_multi_package; then
     is_multi_package="true"
   fi
 
