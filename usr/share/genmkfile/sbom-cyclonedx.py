@@ -50,12 +50,15 @@ def main():
     bom.metadata.timestamp = None
     root = deb_component(binpkg, ComponentType.APPLICATION, version)
     bom.metadata.component = root
+    ## Property namespace is the TOOL ('genmkfile'), not a distro: genmkfile
+    ## builds both Kicksecure and Whonix packages, so the SBOM must not be
+    ## stamped with either project's name.
     bom.metadata.properties.add(
-        Property(name="kicksecure:sbom:tier", value="declared-floor")
+        Property(name="genmkfile:sbom:tier", value="declared-floor")
     )
     bom.metadata.properties.add(
         Property(
-            name="kicksecure:sbom:source",
+            name="genmkfile:sbom:source",
             value="debian/control top-level dependencies (Pre-Depends, Depends)",
         )
     )
