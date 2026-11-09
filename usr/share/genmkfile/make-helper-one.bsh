@@ -1111,11 +1111,11 @@ make_pkgfiles_multi_package() {
   ## ordinary normalised filesystem paths without find(1) glob metacharacters,
   ## which is what git-managed submodules use.
   if [ -f .gitmodules ]; then
-    while IFS= read -r sm_path; do
+    while read -r _ sm_path; do
       [ -n "${sm_path}" ] || continue
       [ "${#sm_prune[@]}" -eq 0 ] || sm_prune+=(-o)
       sm_prune+=(-path "./${sm_path}" -o -path "./${sm_path}/*")
-    done < <(git config --file .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null | sed 's/^[^ ]* //')
+    done < <(git config --file .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null)
   fi
   if [ "${#sm_prune[@]}" -gt 0 ]; then
     find_cmd+=('(' "${sm_prune[@]}" ')' -prune -o)
@@ -1351,7 +1351,9 @@ make_sbom() {
     fi
 
     raw="$(grep-dctrl --field=Package --exact-match "${bp}" --show-field=Pre-Depends,Depends --no-field-names "${control}" || true)"
-    deps="$(make_dependencies_filter_helper <<<"${raw}" | tr ' ' '\n' | LC_ALL=C sort --unique | awk 'NF')"
+    ## One dependency name per line, sorted and de-duplicated. Empty lines are
+    ## dropped by the emitter (its `if dep` filter), so no blank-line cleanup here.
+    deps="$(make_dependencies_filter_helper <<<"${raw}" | tr ' ' '\n' | LC_ALL=C sort --unique)"
 
     sbom_tag=""
     if [ "${is_multi_package}" = "true" ]; then
