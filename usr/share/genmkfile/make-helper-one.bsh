@@ -745,6 +745,11 @@ genmkfile debinstfile
 genmkfile manpages
    Create man pages from the man source folder. Output is stored in auto-generated-man-pages folder.
 
+genmkfile sbom
+   Create a declared-floor CycloneDX SBOM per binary package from debian/control
+   top-level dependencies. Output is usr/share/sbom/<binpkg>.cdx.json, shipped in
+   the .deb by 'genmkfile debinstfile'. Run 'genmkfile debinstfile' afterwards.
+
 genmkfile uch
    Write changelog.upstream: a REUSE header plus a pointer to git history.
 
@@ -1266,6 +1271,67 @@ make_manpages() {
 
   done
   shopt -u globstar dotglob nullglob
+}
+
+make_sbom() {
+  ## Generate a declared-floor CycloneDX SBOM per binary package from the
+  ## debian/control top-level dependencies (Pre-Depends + Depends). Written to
+  ## usr/share/sbom/<binpkg>.cdx.json so 'genmkfile debinstfile' ships it inside
+  ## the .deb, where it then rides the apt repository Release/InRelease
+  ## signature (no separate SBOM signature needed). This is the minimum the EU
+  ## Cyber Resilience Act Annex I asks for ("at the very least the top-level
+  ## dependencies"); it is NOT version-pinned. A pinned, full-closure SBOM is a
+  ## separate build-time/image concern and out of scope for this target.
+  local control version package_list bp raw deps sbom_tag sbom_src is_multi_package
+  make_require grep-dctrl dpkg-parsechangelog python3
+
+  control="${make_debian_control_file_absolute_path:-debian/control}"
+  if ! test -f "${control}"; then
+    make_output_info "${FUNCNAME[0]}: no debian/control; nothing to do"
+    return 0
+  fi
+  version="$(dpkg-parsechangelog -l debian/changelog -S Version)"
+
+  ## Multi-package sources route each file to its binary package via a
+  ## '#<pkgname>' filename tag (see make_debinstfile_create). Detect that the
+  ## same way debinstfile does and match it, so the SBOM lands in the correct
+  ## .deb. Single-package trees stay untagged and are picked up by the 'usr/*'
+  ## install line. Forked packages with a hand-maintained debian/install are
+  ## not auto-shipped; that is consistent with debinstfile and left to the
+  ## maintainer.
+  ## '-print -quit' stops at the first tagged file: no pipe, so no 'find | grep
+  ## -q' SIGPIPE that 'pipefail' would turn into a false negative.
+  local tagged_probe
+  is_multi_package="false"
+  tagged_probe="$(find . -name .git -prune -o '(' -type f -o -type l ')' -iname '*#*' -print -quit 2>/dev/null)"
+  if [ -n "${tagged_probe}" ]; then
+    is_multi_package="true"
+  fi
+
+  mkdir --parents -- usr/share/sbom
+
+  package_list="$(grep-dctrl --show-field=Package --no-field-names '' "${control}")"
+  while IFS= read -r bp; do
+    [ -n "${bp}" ] || continue
+    ## Validate before interpolating into a filesystem path. Regex per
+    ## https://www.debian.org/doc/debian-policy/ch-controlfields.html#s-f-source
+    if ! [[ "${bp}" =~ ^[a-z0-9][a-z0-9+.-]+$ ]]; then
+      exit_with_error 1 "invalid binary package name '${bp}' in debian/control."
+    fi
+
+    raw="$(grep-dctrl --field=Package --exact-match "${bp}" --show-field=Pre-Depends,Depends --no-field-names "${control}" || true)"
+    deps="$(make_dependencies_filter_helper <<<"${raw}" | tr ' ' '\n' | LC_ALL=C sort --unique | awk 'NF')"
+
+    sbom_tag=""
+    if [ "${is_multi_package}" = "true" ]; then
+      sbom_tag="#${bp}"
+    fi
+    sbom_src="usr/share/sbom/${bp}.cdx.json${sbom_tag}"
+
+    DEPS="${deps}" BINPKG="${bp}" VERSION="${version}" \
+      "${GENMKFILE_PATH}/sbom-cyclonedx.py" >"${sbom_src}"
+    make_output_info "${FUNCNAME[0]}: wrote ${sbom_src}"
+  done <<< "${package_list}"
 }
 
 make_uch() {
