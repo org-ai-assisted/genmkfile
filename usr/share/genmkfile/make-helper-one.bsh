@@ -106,19 +106,69 @@ If '${cmd}' is listed in debian/control, try:
   done
 }
 
-## Validate DEBEMAIL / DEBFULLNAME. The matching tools (debsign,
-## debchange, sq, sq-git, git, bc, ...) are 'make_require'd at each
-## individual call site rather than lumped together here, so failing a
-## target only blocks on the tools that target actually needs.
+## Derive DEBEMAIL and DEBFULLNAME from the debian/control 'Maintainer:' field.
+deb_maintainer_identity_from_control() {
+  local maintainer_raw derived_name derived_email
+
+  if [ -z "${make_debian_control_file_absolute_path:-}" ] \
+    || [ ! -r "${make_debian_control_file_absolute_path}" ]; then
+    return 0
+  fi
+
+  make_require grep-dctrl
+
+  ## Only look for the maintainer field in the source stanza.
+  if ! maintainer_raw="$(grep-dctrl -F Source --show-field=Maintainer --no-field-names '' "${make_debian_control_file_absolute_path}")"; then
+    exit_with_error 1 "failed to parse the Maintainer field from '${make_debian_control_file_absolute_path}'. Fix the file."
+  fi
+
+  ## Reject multi-line values, Maintainer should just be one line.
+  if [[ "${maintainer_raw}" == *$'\n'* ]]; then
+    exit_with_error 1 "the Maintainer field in '${make_debian_control_file_absolute_path}' spans multiple lines. Fix the file."
+  fi
+
+  ## Validate field value.
+  if [[ "${maintainer_raw}" == *'<'*'<'* ]] \
+    || [[ "${maintainer_raw}" == *'>'*'>'* ]] \
+    || ! [[ "${maintainer_raw}" == *'<'*'>'* ]]; then
+    exit_with_error 1 "corrupt Maintainer field in '${make_debian_control_file_absolute_path}'. Fix the file."
+  fi
+
+  derived_email="${maintainer_raw#*<}"
+  derived_email="${derived_email%%>*}"
+  derived_name="${maintainer_raw%%<*}"
+  ## Strip surrounding whitespace.
+  derived_email="${derived_email#"${derived_email%%[![:space:]]*}"}"
+  derived_email="${derived_email%"${derived_email##*[![:space:]]}"}"
+  derived_name="${derived_name#"${derived_name%%[![:space:]]*}"}"
+  derived_name="${derived_name%"${derived_name##*[![:space:]]}"}"
+
+  ## Sanity-check the email address.
+  if [[ "${derived_email}" == *[[:space:]]* ]] \
+    || [[ "${derived_email}" == *@*@* ]] \
+    || ! [[ "${derived_email}" == ?*@?* ]]; then
+    exit_with_error 1 "derived maintainer e-mail '${derived_email}' from '${make_debian_control_file_absolute_path}' is not a valid address. Fix the file."
+  fi
+
+  DEBEMAIL="${derived_email}"
+  DEBFULLNAME="${derived_name}"
+  export DEBEMAIL DEBFULLNAME
+}
+
+## Ensure required variables are set.
 deb_variables_check() {
+  ## A non-empty identity is mandatory.
   if [ -z "${DEBEMAIL:-}" ]; then
-    ## Otherwise e-mail address in debian/changelog would default to
-    ## user@host.localdomain and then lintian would complain and exit with
-    ## failure code.
-    exit_with_error 1 "environment variable DEBEMAIL may not be empty! Both, DEBEMAIL and DEBFULLNAME need to be set!"
+    if [ -n "${DEBFULLNAME:-}" ]; then
+      exit_with_error 1 "DEBEMAIL is empty but DEBFULLNAME is non-empty. Either set both or unset both."
+    fi
+    exit_with_error 1 "DEBEMAIL is empty and could not be derived from debian/control. Fix the file and optionally set DEBEMAIL and DEBFULLNAME."
   fi
   if [ -z "${DEBFULLNAME:-}" ]; then
-    exit_with_error 1 "environment variable DEBFULLNAME may not be empty! Both, DEBEMAIL and DEBFULLNAME need to be set!"
+    if [ -n "${DEBEMAIL:-}" ]; then
+      exit_with_error 1 "DEBFULLNAME is empty but DEBEMAIL is non-empty. Either set both or unset both."
+    fi
+    exit_with_error 1 "DEBFULLNAME is empty and could not be derived from debian/control. Fix the file and optionally set DEBEMAIL and DEBFULLNAME."
   fi
 
   ## TODO: DEBSIGN_KEYID ?
@@ -256,6 +306,11 @@ make_get_dependencies() {
   # shellcheck source=./shared.bsh
   source "${GENMKFILE_PATH}/shared.bsh"
   make_shared_function
+
+  ## If DEBEMAIL or DEBFULLNAME aren't set, extract them from the control file.
+  if [ -z "${DEBEMAIL:-}" ] && [ -z "${DEBFULLNAME:-}" ]; then
+    deb_maintainer_identity_from_control
+  fi
 
   ## Special repos opted in via make_use_git_describe_for_version
   ## have no debian/control; nothing to parse.
@@ -690,8 +745,13 @@ genmkfile debinstfile
 genmkfile manpages
    Create man pages from the man source folder. Output is stored in auto-generated-man-pages folder.
 
+genmkfile sbom
+   Create a declared-floor CycloneDX SBOM per binary package from debian/control
+   top-level dependencies. Output is usr/share/sbom/<binpkg>.cdx.json, shipped in
+   the .deb by 'genmkfile debinstfile'. Run 'genmkfile debinstfile' afterwards.
+
 genmkfile uch
-   Store upstream changelog from git log in changelog.upstream.
+   Write changelog.upstream: a REUSE header plus a pointer to git history.
 
 genmkfile install
    Copy files from the source tree to system-wide directories.
@@ -1030,6 +1090,41 @@ debinstfile_has_nogenmkfile_marker() {
   grep --extended-regexp -- '^[[:space:]]*#*[[:space:]]*nogenmkfile[[:space:]]*$' "$1" >/dev/null 2>&1
 }
 
+## True if the package routes installable files to binary packages via a
+## '#<pkgname>' filename tag (multi-package mode), false otherwise. Shared by
+## make_debinstfile_create (which strips the tag) and make_sbom (which appends
+## it) so the two can never disagree about a package's mode -- a divergence
+## would ship the SBOM under a literal '#<pkg>'-tagged path. Same
+## find_pkgfiles_args exclusions (./debian, .git, .gitignore). '-print -quit'
+## returns at the first match: no pipe, so no 'find | grep -q' SIGPIPE that
+## pipefail would turn into a false negative.
+make_pkgfiles_multi_package() {
+  local probe sm_path
+  local -a find_cmd=(find .) sm_prune=()
+  ## Submodule working trees are separate source packages with their own tags;
+  ## their '#'-tagged files must not flip THIS package's mode (matters for the
+  ## derivative-maker parent, whose submodules carry tagged files). Prune each
+  ## submodule path. Read with git's own config parser (correct unquoting and
+  ## comment handling, unlike a hand-rolled scan); only reached when .gitmodules
+  ## exists, i.e. a git checkout where git is present (a build chroot unpacks
+  ## from the source package, which carries no .gitmodules). Submodule paths are
+  ## ordinary normalised filesystem paths without find(1) glob metacharacters,
+  ## which is what git-managed submodules use.
+  if [ -f .gitmodules ]; then
+    while read -r _ sm_path; do
+      [ -n "${sm_path}" ] || continue
+      [ "${#sm_prune[@]}" -eq 0 ] || sm_prune+=(-o)
+      sm_prune+=(-path "./${sm_path}" -o -path "./${sm_path}/*")
+    done < <(git config --file .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null)
+  fi
+  if [ "${#sm_prune[@]}" -gt 0 ]; then
+    find_cmd+=('(' "${sm_prune[@]}" ')' -prune -o)
+  fi
+  find_cmd+=("${find_pkgfiles_args[@]}" -iname '*#*' '(' -type f -o -type l ')' -print -quit)
+  probe="$("${find_cmd[@]}" 2>/dev/null)"
+  [ -n "${probe}" ]
+}
+
 make_debinstfile() {
   make_debinstfile_create
 }
@@ -1062,7 +1157,7 @@ make_debinstfile_create() {
   find_cmd+=(-iname '*#*')
   find_cmd+=('(' -type f -o -type l ')')
 
-  if "${find_cmd[@]}" | grep --fixed-strings -- '#' >/dev/null; then
+  if make_pkgfiles_multi_package; then
     true "multi-package hash filename found: yes"
 
     ## If we're in multi-package mode, any files without the '#' tag will be
@@ -1213,17 +1308,89 @@ make_manpages() {
   shopt -u globstar dotglob nullglob
 }
 
+make_sbom() {
+  ## Generate a declared-floor CycloneDX SBOM per binary package from the
+  ## debian/control top-level dependencies (Pre-Depends + Depends). Written to
+  ## usr/share/sbom/<binpkg>.cdx.json so 'genmkfile debinstfile' ships it inside
+  ## the .deb, where it then rides the apt repository Release/InRelease
+  ## signature (no separate SBOM signature needed). This is the minimum the EU
+  ## Cyber Resilience Act Annex I asks for ("at the very least the top-level
+  ## dependencies"); it is NOT version-pinned. A pinned, full-closure SBOM is a
+  ## separate build-time/image concern and out of scope for this target.
+  local control version package_list bp raw deps sbom_tag sbom_src is_multi_package
+  make_require grep-dctrl dpkg-parsechangelog python3
+
+  control="${make_debian_control_file_absolute_path:-debian/control}"
+  if ! test -f "${control}"; then
+    make_output_info "${FUNCNAME[0]}: no debian/control; nothing to do"
+    return 0
+  fi
+  version="$(dpkg-parsechangelog -l debian/changelog -S Version)"
+
+  ## Multi-package sources route each file to its binary package via a
+  ## '#<pkgname>' filename tag; make_debinstfile_create later strips it. Reuse
+  ## its EXACT mode detection (shared helper) so the SBOM lands in the correct
+  ## .deb. Single-package trees stay untagged and are picked up by the 'usr/*'
+  ## install line. Forked packages with a hand-maintained debian/install are
+  ## not auto-shipped; that is consistent with debinstfile and left to the
+  ## maintainer.
+  is_multi_package="false"
+  if make_pkgfiles_multi_package; then
+    is_multi_package="true"
+  fi
+
+  mkdir --parents -- usr/share/sbom
+
+  package_list="$(grep-dctrl --show-field=Package --no-field-names '' "${control}")"
+  while IFS= read -r bp; do
+    [ -n "${bp}" ] || continue
+    ## Validate before interpolating into a filesystem path. Regex per
+    ## https://www.debian.org/doc/debian-policy/ch-controlfields.html#s-f-source
+    if ! [[ "${bp}" =~ ^[a-z0-9][a-z0-9+.-]+$ ]]; then
+      exit_with_error 1 "invalid binary package name '${bp}' in debian/control."
+    fi
+
+    raw="$(grep-dctrl --field=Package --exact-match "${bp}" --show-field=Pre-Depends,Depends --no-field-names "${control}" || true)"
+    ## One dependency name per line, sorted and de-duplicated. Empty lines are
+    ## dropped by the emitter (its `if dep` filter), so no blank-line cleanup here.
+    deps="$(make_dependencies_filter_helper <<<"${raw}" | tr ' ' '\n' | LC_ALL=C sort --unique)"
+
+    sbom_tag=""
+    if [ "${is_multi_package}" = "true" ]; then
+      sbom_tag="#${bp}"
+    fi
+    sbom_src="usr/share/sbom/${bp}.cdx.json${sbom_tag}"
+
+    DEPS="${deps}" BINPKG="${bp}" VERSION="${version}" \
+      "${GENMKFILE_PATH}/sbom-cyclonedx.py" >"${sbom_src}"
+    make_output_info "${FUNCNAME[0]}: wrote ${sbom_src}"
+  done <<< "${package_list}"
+}
+
 make_uch() {
   if test -f "${PWD}/CHANGES"; then
     return 0
   fi
-  make_require git sponge
-  git log | \
-    sed 's/[[:space:]]\+$//' | \
-    stcat | \
-    sponge -- "${PWD}/changelog.upstream"
-  test -f "${PWD}/changelog.upstream"
-  unicode-show "${PWD}/changelog.upstream"
+  ## Per-package maintainer email (kicksecure package -> kicksecure.com, whonix
+  ## package -> whonix.org) via genmkfile's own debian/control detection. The
+  ## target dispatch sets DEBEMAIL before this runs; derive it here too so a
+  ## direct/library call still resolves it.
+  if [ -z "${DEBEMAIL:-}" ]; then
+    # shellcheck source=./shared.bsh
+    source "${GENMKFILE_PATH}/shared.bsh"
+    make_shared_function
+    deb_maintainer_identity_from_control
+  fi
+  if [ -z "${DEBEMAIL:-}" ]; then
+    exit_with_error 1 "make_uch: no maintainer email; set DEBEMAIL or add debian/control Maintainer."
+  fi
+  ## git history IS the changelog; emit only a REUSE header plus a pointer.
+  printf '%s\n' \
+    "## SPDX-FileCopyrightText: ENCRYPTED SUPPORT LLC <${DEBEMAIL}>" \
+    "## SPDX-License-Identifier: AGPL-3.0-or-later" \
+    "" \
+    "See git history for full changelog." \
+    > "${PWD}/changelog.upstream"
 }
 
 make_distclean() {
@@ -1329,6 +1496,47 @@ make_deb_all_dep_echo() {
   make_function_run make_deb_shared_dep_echo
 }
 
+make_debhelper_token_check() {
+  ## '#DEBHELPER#' is substituted by a plain-text replace of EVERY occurrence in a
+  ## maintainer script, so more than one occurrence -- or one not on a line by itself --
+  ## duplicates or mangles the generated snippet. Accept exactly one standalone token
+  ## (leading/trailing whitespace allowed) or none; reject anything else.
+  ## Covers arch-qualified names (debian/[<pkg>.]<script>.<arch>, selected by
+  ## dh_installdeb); skips debhelper's own generated '*.debhelper' artifacts. '--text'
+  ## so a stray NUL cannot make grep treat the script as binary and miscount.
+  local script_file base token_count standalone_count nullglob_was_set
+  shopt -q nullglob && nullglob_was_set="true" || nullglob_was_set="false"
+  shopt -s nullglob
+  for script_file in debian/*; do
+    [ -f "${script_file}" ] || continue
+    base="${script_file##*/}"
+    case "${base}" in
+      ## debhelper's own generated snippet files are not source scripts.
+      *.debhelper)
+        continue
+        ;;
+      ## Maintainer scripts: bare, <pkg>-qualified, and either form .<arch>-qualified.
+      preinst | postinst | prerm | postrm | \
+      *.preinst | *.postinst | *.prerm | *.postrm | \
+      preinst.* | postinst.* | prerm.* | postrm.* | \
+      *.preinst.* | *.postinst.* | *.prerm.* | *.postrm.*)
+        token_count="$({ grep --only-matching --fixed-strings --text -- '#DEBHELPER#' "${script_file}" || true; } | wc -l)"
+        if [ "${token_count}" -eq 0 ]; then
+          continue
+        fi
+        standalone_count="$(grep --count --extended-regexp --text -- '^[[:space:]]*#DEBHELPER#[[:space:]]*$' "${script_file}" || true)"
+        if [ "${token_count}" -ne 1 ] || [ "${standalone_count}" -ne 1 ]; then
+          exit_with_error 1 "'#DEBHELPER#' in maintainer script '${script_file}' must appear exactly once, on a line by itself (found ${token_count} occurrence(s), ${standalone_count} standalone)."
+        fi
+        ;;
+      *)
+        continue
+        ;;
+    esac
+  done
+  [ "${nullglob_was_set}" = "true" ] || shopt -u nullglob
+}
+
 make_deb_pkg_build_shared() {
   local cow_folder base_folder package
   local -a make_cowbuilder_config_file_arg=()
@@ -1339,6 +1547,28 @@ make_deb_pkg_build_shared() {
     && ! [ "${target_architecture}" = "${first_arch}" ]; then
     make_output_info "Skipping build because all binaries built by this package are arch-all and they have already been built."
     return 0
+  fi
+
+  make_debhelper_token_check
+
+  ## REUSE/SPDX compliance check, before the build so a non-compliant tree
+  ## fails fast. Opt-in: only a source tree that carries REUSE.toml (or
+  ## .reuse/dep5) is checked, so packages that have not adopted REUSE are
+  ## unaffected.
+  if [ "${make_use_reuse:-}" = "false" ]; then
+    make_output_info "make_use_reuse=false - skipping reuse lint."
+  elif [ "${make_use_reuse:-}" = "true" ]; then
+    make_output_info "make_use_reuse=true - running reuse lint..."
+    make_function_run make_reuse
+  elif test -f "${PWD}/REUSE.toml" || test -f "${PWD}/.reuse/dep5"; then
+    if has reuse; then
+      make_output_info "REUSE.toml detected, running reuse lint..."
+      make_function_run make_reuse
+    else
+      make_output_warn "REUSE.toml present but the 'reuse' tool is not installed - skipping the SPDX compliance check. Install the 'reuse' package to enable it."
+    fi
+  else
+    make_output_info "no REUSE.toml - skipping reuse lint (package has not adopted REUSE)."
   fi
 
   if [ "${make_use_cowbuilder:-}" = "true" ]; then
@@ -1670,6 +1900,41 @@ make_lintian() {
     make_lintian_on_warning "${make_lintian_exit_code}"
   else
     make_output_info "lintian ok."
+  fi
+}
+
+make_reuse_on_warning() {
+  local reuse_exit_code="${1:-0}"
+  if [ "${make_reuse_fail_open_versus_closed:-}" = "open" ]; then
+    make_output_warn "reuse lint warning. make_reuse_fail_open_versus_closed=open - failing open."
+    return 0
+  fi
+  make_output_error "reuse lint warning. make_reuse_fail_open_versus_closed is not set to 'open' - failing closed."
+  ## This is the failure handler (reuse lint is judged by its exit code, which
+  ## make_reuse only reaches here when non-zero); never exit 0 from it.
+  [ "${reuse_exit_code}" = "0" ] && reuse_exit_code=1
+  exit "${reuse_exit_code}"
+}
+
+make_reuse() {
+  ## Validate REUSE/SPDX compliance of the source tree in ${PWD}. Runs
+  ## offline. Assumes a clean source tree; build residue is a separate fault
+  ## caught elsewhere, not worked around here.
+  local make_reuse_exit_code="0"
+  local reuse_output
+  make_output_info "running: reuse lint (in '${PWD}')"
+  reuse_output="$(reuse lint 2>&1)" || make_reuse_exit_code="$?"
+  if [ "${make_reuse_exit_code}" != "0" ]; then
+    if ! test -o xtrace; then
+      make_output_info "reuse lint exit code: ${make_reuse_exit_code}"
+      make_output_info "reuse lint output:"
+      printf "%s\n" "################################################################################"
+      printf "%s\n" "${reuse_output}"
+      printf "%s\n" "################################################################################"
+    fi
+    make_reuse_on_warning "${make_reuse_exit_code}"
+  else
+    make_output_info "reuse lint ok."
   fi
 }
 
