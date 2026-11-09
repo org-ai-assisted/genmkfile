@@ -16,6 +16,7 @@
 ##   VERSION - package version (from debian/changelog)
 ##   DEPS    - newline-separated top-level dependency names (may be empty)
 
+import json
 import os
 
 from cyclonedx.model import Property
@@ -64,7 +65,12 @@ def main():
     ## incomplete-graph warning).
     bom.register_dependency(root, dep_components)
 
-    print(JsonV1Dot6(bom).output_as_string(indent=2))
+    ## Re-serialize the library output to the repo's canonical JSON form (sorted
+    ## keys, 2-space indent, trailing newline from print) so the committed file
+    ## passes the pretty-format-json gate and stays byte-stable. Key order is not
+    ## significant in JSON, so sorting keeps the document valid CycloneDX.
+    document = json.loads(JsonV1Dot6(bom).output_as_string(indent=2))
+    print(json.dumps(document, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
