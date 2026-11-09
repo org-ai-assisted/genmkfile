@@ -1099,8 +1099,25 @@ debinstfile_has_nogenmkfile_marker() {
 ## returns at the first match: no pipe, so no 'find | grep -q' SIGPIPE that
 ## pipefail would turn into a false negative.
 make_pkgfiles_multi_package() {
-  local probe
-  probe="$(find . "${find_pkgfiles_args[@]}" -iname '*#*' '(' -type f -o -type l ')' -print -quit 2>/dev/null)"
+  local probe sm_path
+  local -a find_cmd=(find .) sm_prune=()
+  ## Submodule working trees are separate source packages with their own tags;
+  ## their '#'-tagged files must not flip THIS package's mode (matters for the
+  ## derivative-maker parent, whose submodules carry tagged files). Prune each
+  ## submodule path, parsed from .gitmodules directly so neither the git binary
+  ## nor a .git dir is required (works in a build chroot too).
+  if [ -f .gitmodules ]; then
+    while IFS= read -r sm_path; do
+      [ -n "${sm_path}" ] || continue
+      [ "${#sm_prune[@]}" -eq 0 ] || sm_prune+=(-o)
+      sm_prune+=(-path "./${sm_path}" -o -path "./${sm_path}/*")
+    done < <(awk '/^[[:space:]]*path[[:space:]]*=/ { sub(/^[[:space:]]*path[[:space:]]*=[[:space:]]*/, ""); sub(/[[:space:]]*$/, ""); print }' .gitmodules)
+  fi
+  if [ "${#sm_prune[@]}" -gt 0 ]; then
+    find_cmd+=('(' "${sm_prune[@]}" ')' -prune -o)
+  fi
+  find_cmd+=("${find_pkgfiles_args[@]}" -iname '*#*' '(' -type f -o -type l ')' -print -quit)
+  probe="$("${find_cmd[@]}" 2>/dev/null)"
   [ -n "${probe}" ]
 }
 
