@@ -9,9 +9,12 @@
 ## canonical and schema-valid. Run directly as a script: sys.path[0] is this
 ## trusted install directory, not the scanned package's working directory, so a
 ## planted module in a package tree cannot shadow the stdlib or these imports.
-## Output is deterministic (no serial number, no timestamp, purl-based
-## bom-refs) so a committed, regenerated SBOM does not churn. Inputs via
-## environment, set by genmkfile make_sbom:
+## Output is REPRODUCIBLE in the reproducible-builds sense: no serial number,
+## no timestamp, purl-based bom-refs, and sorted keys, so it is byte-identical
+## regardless of locale, timezone or SOURCE_DATE_EPOCH, and a committed,
+## regenerated SBOM never churns. Do NOT add a timestamp or a random serial
+## number here -- either would break that guarantee. Inputs via environment,
+## set by genmkfile make_sbom:
 ##   BINPKG  - binary package name
 ##   VERSION - package version (from debian/changelog)
 ##   DEPS    - newline-separated top-level dependency names (may be empty)
