@@ -35,6 +35,16 @@ export make_use_lintian=false
 Or can be configured to fail closed (non-zero exit code).
 export make_use_lintian=true
 
+Can validate REUSE/SPDX licensing compliance using the 'reuse' tool.
+Auto-enabled when the package source carries a REUSE.toml (or .reuse/dep5)
+and the 'reuse' tool is installed; packages without REUSE.toml are
+unaffected. Runs before the build and fails closed by default.
+export make_use_reuse=false
+Force on (error if the 'reuse' tool is missing is still a skip-with-warning):
+export make_use_reuse=true
+Warn instead of failing the build:
+export make_reuse_fail_open_versus_closed=open
+
 Can build packages without chroot using debuild (default) or inside chroot
 using cowbuilder. To enable cowbuilder, use:
 export make_use_cowbuilder=true
