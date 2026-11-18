@@ -3,21 +3,10 @@
 ## Copyright (C) 2026 - 2026 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
 ## See the file COPYING for copying conditions.
 
-## Emit a declared-floor CycloneDX SBOM for one Debian binary package to stdout,
-## using the official OWASP CycloneDX library (python3-cyclonedx-lib) and the
-## reference purl library (python3-packageurl) so the document and its purls are
-## canonical and schema-valid. Run directly as a script: sys.path[0] is this
-## trusted install directory, not the scanned package's working directory, so a
-## planted module in a package tree cannot shadow the stdlib or these imports.
-## Output is REPRODUCIBLE in the reproducible-builds sense: no serial number,
-## no timestamp, purl-based bom-refs, and sorted keys, so it is byte-identical
-## regardless of locale, timezone or SOURCE_DATE_EPOCH, and a committed,
-## regenerated SBOM never churns. Do NOT add a timestamp or a random serial
-## number here -- either would break that guarantee. Inputs via environment,
-## set by genmkfile make_sbom:
-##   BINPKG  - binary package name
-##   VERSION - package version (from debian/changelog)
-##   DEPS    - newline-separated top-level dependency names (may be empty)
+## AI-assisted.
+
+## Generates an SBOM for a package in CycloneDX format, and outputs it to
+## stdout.
 
 import json
 import os
@@ -50,12 +39,6 @@ def main():
     bom.metadata.timestamp = None
     root = deb_component(binpkg, ComponentType.APPLICATION, version)
     bom.metadata.component = root
-    ## Property namespace is the TOOL ('genmkfile'), not a distro: genmkfile
-    ## builds both Kicksecure and Whonix packages, so the SBOM must not be
-    ## stamped with either project's name.
-    bom.metadata.properties.add(
-        Property(name="genmkfile:sbom:tier", value="declared-floor")
-    )
     bom.metadata.properties.add(
         Property(
             name="genmkfile:sbom:source",
@@ -63,18 +46,17 @@ def main():
         )
     )
 
+    ## FIXME: This will generate contradictory information across SBOMs.
+    ## helper-scripts for instance will declare itself as an application but
+    ## anything depending on it will call it a library.
+    ##
+    ## FIXME: No version information is included for dependencies.
     dep_components = [deb_component(dep, ComponentType.LIBRARY) for dep in deps]
     for dep_component in dep_components:
         bom.components.add(dep_component)
-    ## Link the root component to its declared top-level dependencies so the
-    ## CycloneDX dependency graph is complete (also silences the library's
-    ## incomplete-graph warning).
     bom.register_dependency(root, dep_components)
 
-    ## Re-serialize the library output to the repo's canonical JSON form (sorted
-    ## keys, 2-space indent, trailing newline from print) so the committed file
-    ## passes the pretty-format-json gate and stays byte-stable. Key order is not
-    ## significant in JSON, so sorting keeps the document valid CycloneDX.
+    ## Generate SBOM json and normalize it.
     document = json.loads(JsonV1Dot6(bom).output_as_string(indent=2))
     print(json.dumps(document, indent=2, sort_keys=True))
 
