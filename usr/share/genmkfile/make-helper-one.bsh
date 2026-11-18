@@ -1291,12 +1291,18 @@ make_manpages() {
   shopt -u globstar dotglob nullglob
 }
 
-## FIXME: SBOMs cannot be stored in packages themselves, as they must contain
-## dependency version information which is build-time dependent and would break
-## reproducible builds.
+## This source-release SBOM carries NO dependency version numbers, by design.
+## The source vendors nothing (no dependency is copied into the tree), so it
+## pins no versions itself. debian/control only NAMES build and runtime
+## dependencies; the builder satisfies them from whichever Debian release is
+## current at build time (e.g. Trixie while stable), and alternative packages
+## may qualify -- so dependency versions are neither known nor fixed at
+## source-release time. Omitting them is correct and keeps the SBOM
+## reproducible; version-pinned SBOMs are a separate per-.deb build artifact.
 make_sbom() {
-  local control_file pkg_version package_list binpkg_name raw_dep_lines_str \
-    dep_lines_str sbom_tag sbom_src is_multi_package
+  local control_file pkg_version pkg_source_date_epoch pkg_section package_list \
+    binpkg_name binpkg_section raw_dep_lines_str dep_lines_str sbom_tag sbom_src \
+    is_multi_package
 
   make_require grep-dctrl dpkg-parsechangelog python3
 
@@ -1306,6 +1312,18 @@ make_sbom() {
     return 0
   fi
   pkg_version="$(dpkg-parsechangelog --file='debian/changelog' --show-field='Version')"
+  ## Timestamp the SBOM with the changelog release date, honoring an existing
+  ## SOURCE_DATE_EPOCH if the build already set one.
+  pkg_source_date_epoch="${SOURCE_DATE_EPOCH:-$(dpkg-parsechangelog --file='debian/changelog' --show-field='Timestamp')}"
+  pkg_section="$(grep-dctrl --show-field=Section --no-field-names '' "${control_file}")"
+  pkg_section="${pkg_section%%$'\n'*}"
+
+  ## The emitter reads the source-tree SPDX license via 'reuse'; require it
+  ## exactly when the package has adopted REUSE, so a missing tool fails loud
+  ## instead of silently dropping the license.
+  if test -f REUSE.toml || test -f .reuse/dep5; then
+    make_require reuse
+  fi
 
   is_multi_package="false"
   if make_pkgfiles_multi_package; then
@@ -1325,6 +1343,10 @@ make_sbom() {
     raw_dep_lines_str="$(grep-dctrl --field=Package --exact-match "${binpkg_name}" --show-field=Pre-Depends,Depends --no-field-names "${control_file}" || true)"
     dep_lines_str="$(make_dependencies_filter_helper <<< "${raw_dep_lines_str}" | tr ' ' '\n' | LC_ALL=C sort --unique)"
 
+    ## Per-binary Section, falling back to the source-level Section.
+    binpkg_section="$(grep-dctrl --field=Package --exact-match "${binpkg_name}" --show-field=Section --no-field-names "${control_file}")"
+    [ -n "${binpkg_section}" ] || binpkg_section="${pkg_section}"
+
     sbom_tag=""
     if [ "${is_multi_package}" = "true" ]; then
       sbom_tag="#${binpkg_name}"
@@ -1332,6 +1354,7 @@ make_sbom() {
     sbom_src="usr/share/sbom/${binpkg_name}.cdx.json${sbom_tag}"
 
     DEPS="${dep_lines_str}" BINPKG="${binpkg_name}" VERSION="${pkg_version}" \
+      SECTION="${binpkg_section}" SOURCE_DATE_EPOCH="${pkg_source_date_epoch}" \
       "${GENMKFILE_PATH}/sbom-cyclonedx.py" > "${sbom_src}"
     make_output_info "${FUNCNAME[0]}: wrote ${sbom_src}"
   done <<< "${package_list}"
