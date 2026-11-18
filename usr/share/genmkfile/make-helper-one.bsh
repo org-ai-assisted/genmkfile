@@ -746,12 +746,11 @@ genmkfile manpages
    Create man pages from the man source folder. Output is stored in auto-generated-man-pages folder.
 
 genmkfile sbom
-   Create a declared-floor CycloneDX SBOM per binary package from debian/control
-   top-level dependencies. Output is usr/share/sbom/<binpkg>.cdx.json, shipped in
-   the .deb by 'genmkfile debinstfile'. Run 'genmkfile debinstfile' afterwards.
+   Create software bill of materials files in CycloneDX format for each binary
+   package in debian/control.
 
 genmkfile uch
-   Write changelog.upstream: a REUSE header plus a pointer to git history.
+   Create a changelog.upstream file pointing to git history.
 
 genmkfile install
    Copy files from the source tree to system-wide directories.
@@ -1090,35 +1089,20 @@ debinstfile_has_nogenmkfile_marker() {
   grep --extended-regexp -- '^[[:space:]]*#*[[:space:]]*nogenmkfile[[:space:]]*$' "$1" >/dev/null 2>&1
 }
 
-## True if the package routes installable files to binary packages via a
-## '#<pkgname>' filename tag (multi-package mode), false otherwise. Shared by
-## make_debinstfile_create (which strips the tag) and make_sbom (which appends
-## it) so the two can never disagree about a package's mode -- a divergence
-## would ship the SBOM under a literal '#<pkg>'-tagged path. Same
-## find_pkgfiles_args exclusions (./debian, .git, .gitignore). '-print -quit'
-## returns at the first match: no pipe, so no 'find | grep -q' SIGPIPE that
-## pipefail would turn into a false negative.
+## True if the repo uses multi-package mode, false otherwise.
 make_pkgfiles_multi_package() {
-  local probe sm_path
-  local -a find_cmd=(find .) sm_prune=()
-  ## Submodule working trees are separate source packages with their own tags;
-  ## their '#'-tagged files must not flip THIS package's mode (matters for the
-  ## derivative-maker parent, whose submodules carry tagged files). Prune each
-  ## submodule path. Read with git's own config parser (correct unquoting and
-  ## comment handling, unlike a hand-rolled scan); only reached when .gitmodules
-  ## exists, i.e. a git checkout where git is present (a build chroot unpacks
-  ## from the source package, which carries no .gitmodules). Submodule paths are
-  ## ordinary normalised filesystem paths without find(1) glob metacharacters,
-  ## which is what git-managed submodules use.
+  local probe submodule_path
+  local -a find_cmd=(find .) submodule_prune_args=()
+  ## Ignore submodules.
   if [ -f .gitmodules ]; then
-    while read -r _ sm_path; do
-      [ -n "${sm_path}" ] || continue
-      [ "${#sm_prune[@]}" -eq 0 ] || sm_prune+=(-o)
-      sm_prune+=(-path "./${sm_path}" -o -path "./${sm_path}/*")
+    while read -r _ submodule_path; do
+      [ -n "${submodule_path}" ] || continue
+      [ "${#submodule_prune_args[@]}" -eq 0 ] || submodule_prune_args+=( -o )
+      submodule_prune_args+=(-path "./${submodule_path}" -o -path "./${submodule_path}/*")
     done < <(git config --file .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null)
   fi
-  if [ "${#sm_prune[@]}" -gt 0 ]; then
-    find_cmd+=('(' "${sm_prune[@]}" ')' -prune -o)
+  if [ "${#submodule_prune_args[@]}" -gt 0 ]; then
+    find_cmd+=('(' "${submodule_prune_args[@]}" ')' -prune -o)
   fi
   find_cmd+=("${find_pkgfiles_args[@]}" -iname '*#*' '(' -type f -o -type l ')' -print -quit)
   probe="$("${find_cmd[@]}" 2>/dev/null)"
@@ -1151,12 +1135,6 @@ make_debinstfile_create() {
 
   make_require safe-rm sponge
 
-  find_cmd+=(find)
-  find_cmd+=(.)
-  find_cmd+=("${find_pkgfiles_args[@]}")
-  find_cmd+=(-iname '*#*')
-  find_cmd+=('(' -type f -o -type l ')')
-
   if make_pkgfiles_multi_package; then
     true "multi-package hash filename found: yes"
 
@@ -1187,6 +1165,11 @@ ${untagged_list}"
       fi
     fi
 
+    find_cmd+=(find)
+    find_cmd+=(.)
+    find_cmd+=("${find_pkgfiles_args[@]}")
+    find_cmd+=(-iname '*#*')
+    find_cmd+=('(' -type f -o -type l ')')
     find_cmd+=(-print0)
 
     sorted_install_list="$(mktemp --tmpdir="${genmkfile_temp_dir}")" \
@@ -1308,32 +1291,22 @@ make_manpages() {
   shopt -u globstar dotglob nullglob
 }
 
+## FIXME: SBOMs cannot be stored in packages themselves, as they must contain
+## dependency version information which is build-time dependent and would break
+## reproducible builds.
 make_sbom() {
-  ## Generate a declared-floor CycloneDX SBOM per binary package from the
-  ## debian/control top-level dependencies (Pre-Depends + Depends). Written to
-  ## usr/share/sbom/<binpkg>.cdx.json so 'genmkfile debinstfile' ships it inside
-  ## the .deb, where it then rides the apt repository Release/InRelease
-  ## signature (no separate SBOM signature needed). This is the minimum the EU
-  ## Cyber Resilience Act Annex I asks for ("at the very least the top-level
-  ## dependencies"); it is NOT version-pinned. A pinned, full-closure SBOM is a
-  ## separate build-time/image concern and out of scope for this target.
-  local control version package_list bp raw deps sbom_tag sbom_src is_multi_package
+  local control_file pkg_version package_list binpkg_name raw_dep_lines_str \
+    dep_lines_str sbom_tag sbom_src is_multi_package
+
   make_require grep-dctrl dpkg-parsechangelog python3
 
-  control="${make_debian_control_file_absolute_path:-debian/control}"
-  if ! test -f "${control}"; then
+  control_file="${make_debian_control_file_absolute_path:-debian/control}"
+  if ! test -f "${control_file}"; then
     make_output_info "${FUNCNAME[0]}: no debian/control; nothing to do"
     return 0
   fi
-  version="$(dpkg-parsechangelog -l debian/changelog -S Version)"
+  pkg_version="$(dpkg-parsechangelog --file='debian/changelog' --show-field='Version')"
 
-  ## Multi-package sources route each file to its binary package via a
-  ## '#<pkgname>' filename tag; make_debinstfile_create later strips it. Reuse
-  ## its EXACT mode detection (shared helper) so the SBOM lands in the correct
-  ## .deb. Single-package trees stay untagged and are picked up by the 'usr/*'
-  ## install line. Forked packages with a hand-maintained debian/install are
-  ## not auto-shipped; that is consistent with debinstfile and left to the
-  ## maintainer.
   is_multi_package="false"
   if make_pkgfiles_multi_package; then
     is_multi_package="true"
@@ -1341,28 +1314,25 @@ make_sbom() {
 
   mkdir --parents -- usr/share/sbom
 
-  package_list="$(grep-dctrl --show-field=Package --no-field-names '' "${control}")"
-  while IFS= read -r bp; do
-    [ -n "${bp}" ] || continue
-    ## Validate before interpolating into a filesystem path. Regex per
-    ## https://www.debian.org/doc/debian-policy/ch-controlfields.html#s-f-source
-    if ! [[ "${bp}" =~ ^[a-z0-9][a-z0-9+.-]+$ ]]; then
-      exit_with_error 1 "invalid binary package name '${bp}' in debian/control."
+  package_list="$(grep-dctrl --show-field=Package --no-field-names '' "${control_file}")"
+  while IFS= read -r binpkg_name; do
+    [ -n "${binpkg_name}" ] || continue
+    ## Validate package name.
+    if ! [[ "${binpkg_name}" =~ ^[a-z0-9][a-z0-9+.-]+$ ]]; then
+      exit_with_error 1 "invalid binary package name '${binpkg_name}' in debian/control."
     fi
 
-    raw="$(grep-dctrl --field=Package --exact-match "${bp}" --show-field=Pre-Depends,Depends --no-field-names "${control}" || true)"
-    ## One dependency name per line, sorted and de-duplicated. Empty lines are
-    ## dropped by the emitter (its `if dep` filter), so no blank-line cleanup here.
-    deps="$(make_dependencies_filter_helper <<<"${raw}" | tr ' ' '\n' | LC_ALL=C sort --unique)"
+    raw_dep_lines_str="$(grep-dctrl --field=Package --exact-match "${binpkg_name}" --show-field=Pre-Depends,Depends --no-field-names "${control_file}" || true)"
+    dep_lines_str="$(make_dependencies_filter_helper <<< "${raw_dep_lines_str}" | tr ' ' '\n' | LC_ALL=C sort --unique)"
 
     sbom_tag=""
     if [ "${is_multi_package}" = "true" ]; then
-      sbom_tag="#${bp}"
+      sbom_tag="#${binpkg_name}"
     fi
-    sbom_src="usr/share/sbom/${bp}.cdx.json${sbom_tag}"
+    sbom_src="usr/share/sbom/${binpkg_name}.cdx.json${sbom_tag}"
 
-    DEPS="${deps}" BINPKG="${bp}" VERSION="${version}" \
-      "${GENMKFILE_PATH}/sbom-cyclonedx.py" >"${sbom_src}"
+    DEPS="${dep_lines_str}" BINPKG="${binpkg_name}" VERSION="${pkg_version}" \
+      "${GENMKFILE_PATH}/sbom-cyclonedx.py" > "${sbom_src}"
     make_output_info "${FUNCNAME[0]}: wrote ${sbom_src}"
   done <<< "${package_list}"
 }
@@ -1371,10 +1341,6 @@ make_uch() {
   if test -f "${PWD}/CHANGES"; then
     return 0
   fi
-  ## Per-package maintainer email (kicksecure package -> kicksecure.com, whonix
-  ## package -> whonix.org) via genmkfile's own debian/control detection. The
-  ## target dispatch sets DEBEMAIL before this runs; derive it here too so a
-  ## direct/library call still resolves it.
   if [ -z "${DEBEMAIL:-}" ]; then
     # shellcheck source=./shared.bsh
     source "${GENMKFILE_PATH}/shared.bsh"
@@ -1384,7 +1350,6 @@ make_uch() {
   if [ -z "${DEBEMAIL:-}" ]; then
     exit_with_error 1 "make_uch: no maintainer email; set DEBEMAIL or add debian/control Maintainer."
   fi
-  ## git history IS the changelog; emit only a REUSE header plus a pointer.
   printf '%s\n' \
     "## SPDX-FileCopyrightText: ENCRYPTED SUPPORT LLC <${DEBEMAIL}>" \
     "## SPDX-License-Identifier: AGPL-3.0-or-later" \
@@ -1497,42 +1462,28 @@ make_deb_all_dep_echo() {
 }
 
 make_debhelper_token_check() {
-  ## '#DEBHELPER#' is substituted by a plain-text replace of EVERY occurrence in a
-  ## maintainer script, so more than one occurrence -- or one not on a line by itself --
-  ## duplicates or mangles the generated snippet. Accept exactly one standalone token
-  ## (leading/trailing whitespace allowed) or none; reject anything else.
-  ## Covers arch-qualified names (debian/[<pkg>.]<script>.<arch>, selected by
-  ## dh_installdeb); skips debhelper's own generated '*.debhelper' artifacts. '--text'
-  ## so a stray NUL cannot make grep treat the script as binary and miscount.
-  local script_file base token_count standalone_count nullglob_was_set
+  ## Ensures only a single '#DEBHELPER#' string occurs anywhere in a maintainer
+  ## script, and that it occurs on a line by itself. The line must not be
+  ## indented, as indentation indicates it may be in a function, which would
+  ## likely break its functionality.
+  local script_file token_count nullglob_was_set
   shopt -q nullglob && nullglob_was_set="true" || nullglob_was_set="false"
   shopt -s nullglob
-  for script_file in debian/*; do
+  for script_file in \
+    debian/preinst debian/postinst debian/prerm debian/postrm \
+    debian/*.preinst debian/*.postinst debian/*.prerm debian/*.postrm \
+    debian/*.preinst.* debian/*.postinst.* debian/*.prerm.* debian/*.postrm.*; do
     [ -f "${script_file}" ] || continue
-    base="${script_file##*/}"
-    case "${base}" in
-      ## debhelper's own generated snippet files are not source scripts.
-      *.debhelper)
-        continue
-        ;;
-      ## Maintainer scripts: bare, <pkg>-qualified, and either form .<arch>-qualified.
-      preinst | postinst | prerm | postrm | \
-      *.preinst | *.postinst | *.prerm | *.postrm | \
-      preinst.* | postinst.* | prerm.* | postrm.* | \
-      *.preinst.* | *.postinst.* | *.prerm.* | *.postrm.*)
-        token_count="$({ grep --only-matching --fixed-strings --text -- '#DEBHELPER#' "${script_file}" || true; } | wc -l)"
-        if [ "${token_count}" -eq 0 ]; then
-          continue
-        fi
-        standalone_count="$(grep --count --extended-regexp --text -- '^[[:space:]]*#DEBHELPER#[[:space:]]*$' "${script_file}" || true)"
-        if [ "${token_count}" -ne 1 ] || [ "${standalone_count}" -ne 1 ]; then
-          exit_with_error 1 "'#DEBHELPER#' in maintainer script '${script_file}' must appear exactly once, on a line by itself (found ${token_count} occurrence(s), ${standalone_count} standalone)."
-        fi
-        ;;
-      *)
-        continue
-        ;;
-    esac
+    token_count="$(grep --only-matching --fixed-strings -- '#DEBHELPER#' "${script_file}" | wc -l)"
+    if [ "${token_count}" -gt 1 ]; then
+      exit_with_error 1 "Multiple '#DEBHELPER#' tokens found in maintainer script '${script_file}'!"
+    fi
+    if [ "${token_count}" -lt 1 ]; then
+      exit_with_error 1 "No '#DEBHELPER#' token found in maintainer script '${script_file}'!"
+    fi
+    if grep -e '.\+#DEBHELPER#.*' -e '.*#DEBHELPER#.\+' "${script_file}" ; then
+      exit_with_error 1 "'#DEBHELPER#' token is not on a line by itself! It should not be surrounded with other text or indented."
+    fi
   done
   [ "${nullglob_was_set}" = "true" ] || shopt -u nullglob
 }
@@ -1551,10 +1502,7 @@ make_deb_pkg_build_shared() {
 
   make_debhelper_token_check
 
-  ## REUSE/SPDX compliance check, before the build so a non-compliant tree
-  ## fails fast. Opt-in: only a source tree that carries REUSE.toml (or
-  ## .reuse/dep5) is checked, so packages that have not adopted REUSE are
-  ## unaffected.
+  ## Make sure packages that should be REUSE-compliant actually are.
   if [ "${make_use_reuse:-}" = "false" ]; then
     make_output_info "make_use_reuse=false - skipping reuse lint."
   elif [ "${make_use_reuse:-}" = "true" ]; then
@@ -1565,10 +1513,10 @@ make_deb_pkg_build_shared() {
       make_output_info "REUSE.toml detected, running reuse lint..."
       make_function_run make_reuse
     else
-      make_output_warn "REUSE.toml present but the 'reuse' tool is not installed - skipping the SPDX compliance check. Install the 'reuse' package to enable it."
+      make_output_warn "REUSE.toml present but the 'reuse' tool is not installed, therefore not running 'reuse lint'. Consider installing the 'reuse' package."
     fi
   else
-    make_output_info "no REUSE.toml - skipping reuse lint (package has not adopted REUSE)."
+    make_output_info "no REUSE.toml, skipping reuse lint."
   fi
 
   if [ "${make_use_cowbuilder:-}" = "true" ]; then
@@ -1906,28 +1854,25 @@ make_lintian() {
 make_reuse_on_warning() {
   local reuse_exit_code="${1:-0}"
   if [ "${make_reuse_fail_open_versus_closed:-}" = "open" ]; then
-    make_output_warn "reuse lint warning. make_reuse_fail_open_versus_closed=open - failing open."
+    make_output_warn "'reuse lint' warning. make_reuse_fail_open_versus_closed=open, failing open."
     return 0
   fi
-  make_output_error "reuse lint warning. make_reuse_fail_open_versus_closed is not set to 'open' - failing closed."
-  ## This is the failure handler (reuse lint is judged by its exit code, which
-  ## make_reuse only reaches here when non-zero); never exit 0 from it.
+  make_output_error "'reuse lint' warning. make_reuse_fail_open_versus_closed is not set to 'open', failing closed."
+  ## reuse_exit_code should never be 0 here, but just in case...
   [ "${reuse_exit_code}" = "0" ] && reuse_exit_code=1
   exit "${reuse_exit_code}"
 }
 
 make_reuse() {
-  ## Validate REUSE/SPDX compliance of the source tree in ${PWD}. Runs
-  ## offline. Assumes a clean source tree; build residue is a separate fault
-  ## caught elsewhere, not worked around here.
+  ## Validate REUSE compliance of the source tree in ${PWD}.
   local make_reuse_exit_code="0"
   local reuse_output
   make_output_info "running: reuse lint (in '${PWD}')"
   reuse_output="$(reuse lint 2>&1)" || make_reuse_exit_code="$?"
   if [ "${make_reuse_exit_code}" != "0" ]; then
     if ! test -o xtrace; then
-      make_output_info "reuse lint exit code: ${make_reuse_exit_code}"
-      make_output_info "reuse lint output:"
+      make_output_info "'reuse lint' exit code: ${make_reuse_exit_code}"
+      make_output_info "'reuse lint' output:"
       printf "%s\n" "################################################################################"
       printf "%s\n" "${reuse_output}"
       printf "%s\n" "################################################################################"
