@@ -1315,8 +1315,9 @@ make_sbom() {
   ## Timestamp the SBOM with the changelog release date, honoring an existing
   ## SOURCE_DATE_EPOCH if the build already set one.
   pkg_source_date_epoch="${SOURCE_DATE_EPOCH:-$(dpkg-parsechangelog --file='debian/changelog' --show-field='Timestamp')}"
-  pkg_section="$(grep-dctrl --show-field=Section --no-field-names '' "${control_file}")"
-  pkg_section="${pkg_section%%$'\n'*}"
+  ## Source-stanza Section only (the paragraph carrying a Source field); a binary without
+  ## its own Section inherits THIS, never a sibling binary's.
+  pkg_section="$(grep-dctrl --field=Source --regex '.' --show-field=Section --no-field-names "${control_file}")"
 
   ## The emitter reads the source-tree SPDX license via 'reuse'; require it
   ## exactly when the package has adopted REUSE, so a missing tool fails loud

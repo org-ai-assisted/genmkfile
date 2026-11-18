@@ -17,7 +17,7 @@ from cyclonedx.factory.license import LicenseFactory
 from cyclonedx.model import Property
 from cyclonedx.model.bom import Bom
 from cyclonedx.model.component import Component, ComponentType
-from cyclonedx.model.license import LicenseAcknowledgement
+from cyclonedx.model.license import LicenseAcknowledgement, LicenseExpression
 from cyclonedx.output.json import JsonV1Dot6
 from packageurl import PackageURL
 
@@ -35,24 +35,50 @@ def deb_component(name, version=None):
     )
 
 
-def reuse_license_expression():
-    ## SPDX license from REUSE metadata (REUSE.toml / .reuse/dep5), via
-    ## 'reuse lint --json' .summary.used_licenses -- the set of ids actually
-    ## referenced by a file, so it does not drift. Joined into one SPDX 'AND'
-    ## expression, emitted DECLARED. genmkfile make_require's 'reuse' when this
-    ## metadata is present, so a missing tool fails loud there, not here.
+def reuse_used_licenses():
+    ## SPDX license ids declared in the source tree, via 'reuse --root . lint --json'
+    ## .summary.used_licenses -- the set of ids actually referenced by a file, so it does
+    ## not drift. '--root .' confines the scan to THIS package dir, so a parent VCS root's
+    ## sibling files cannot leak their licenses in. genmkfile make_require's 'reuse' when
+    ## REUSE metadata is present, so a missing tool fails loud there, not here.
     if not (os.path.exists("REUSE.toml") or os.path.exists(".reuse/dep5")):
-        return None
+        return []
     result = subprocess.run(
-        ["reuse", "lint", "--json"],
+        ["reuse", "--root", ".", "lint", "--json"],
         stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
         check=False,
     )
-    used_licenses = sorted(set(json.loads(result.stdout)["summary"]["used_licenses"]))
-    if not used_licenses:
-        return None
-    return " AND ".join(used_licenses)
+    try:
+        report = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        raise SystemExit(
+            "sbom-cyclonedx.py: 'reuse lint --json' produced no parseable output "
+            f"(exit {result.returncode}): {result.stderr.strip()}"
+        )
+    return sorted(set(report["summary"]["used_licenses"]))
+
+
+def declared_license(used_licenses):
+    ## used_licenses is a flat SET of ids -- it does NOT carry the per-file boolean
+    ## structure, so a file's 'A OR B' arrives as {'A', 'B'}. The ids are joined with AND:
+    ## the DECLARED aggregate of licenses present in the source (debsbom's convention).
+    ## Exact for the common single-license package.
+    ## Limitation: a dual-licensed ('OR') file is widened to AND, and a multi-binary source
+    ## gets the whole-source set per binary -- the per-.deb SBOM (debsbom, from
+    ## debian/copyright) is the authoritative per-package expression source.
+    if len(used_licenses) == 1:
+        return LicenseFactory().make_from_string(
+            used_licenses[0], license_acknowledgement=LicenseAcknowledgement.DECLARED
+        )
+    ## A LicenseExpression is built directly for the compound case so the output is always a
+    ## valid CycloneDX 'expression' -- make_from_string mis-emits a compound that contains a
+    ## 'LicenseRef-*' id as a single malformed license 'name'.
+    return LicenseExpression(
+        value=" AND ".join(used_licenses),
+        acknowledgement=LicenseAcknowledgement.DECLARED,
+    )
 
 
 def main():
@@ -79,13 +105,9 @@ def main():
     root = deb_component(binpkg, version)
     bom.metadata.component = root
 
-    license_expr = reuse_license_expression()
-    if license_expr:
-        root.licenses.add(
-            LicenseFactory().make_from_string(
-                license_expr, license_acknowledgement=LicenseAcknowledgement.DECLARED
-            )
-        )
+    used_licenses = reuse_used_licenses()
+    if used_licenses:
+        root.licenses.add(declared_license(used_licenses))
     if section:
         root.properties.add(Property(name="section", value=section))
 
